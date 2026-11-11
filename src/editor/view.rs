@@ -1811,7 +1811,7 @@ impl Editor {
         self.paste(false, window, cx);
     }
 
-    /// ⌘⇧V 粘贴为纯文本.
+    /// ⌘⇧V 粘贴为纯文本: the characters as they are, no Markdown parsing.
     fn on_paste_plain(&mut self, _: &k::PastePlain, window: &mut Window, cx: &mut Context<Self>) {
         self.paste(true, window, cx);
     }
@@ -1870,9 +1870,11 @@ impl Editor {
             _ => false,
         };
         if plain {
-            // ⌘⇧V: the text only (Markdown still converts, as in the browser).
+            // ⌘⇧V: 原样粘贴. Markdown markers stay literal here — `# title`
+            // pastes as text, not as a heading. Anything that should become
+            // structure goes through ⌘V, which is the parsing path.
             if let Some(s) = text.filter(|s| !s.is_empty()) {
-                self.core.paste_markdown(&s);
+                self.core.paste_text(&s);
             }
         } else if let Some(d) = internal {
             self.core.paste_blocks(d.blocks);
