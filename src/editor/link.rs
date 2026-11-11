@@ -89,6 +89,30 @@ pub fn normalize(s: &str) -> String {
     }
 }
 
+/// Opens a link in the browser picked in 设置 › 通用 (the system default when
+/// none is picked). `open -a` takes the app's name; if it fails, the system
+/// default still gets the link, so a browser that was uninstalled can't make
+/// clicking a link do nothing.
+pub(crate) fn open(cx: &mut App, url: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let app = crate::settings::prefs().browser;
+        if !app.is_empty()
+            && std::process::Command::new("open")
+                .arg("-a")
+                .arg(&app)
+                .arg(url)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        {
+            return;
+        }
+    }
+    cx.open_url(url);
+}
+
 /// The link around `offset` (adjacent runs with the same URL merge).
 pub fn link_at(t: &RichText, offset: usize) -> Option<(Range<usize>, String)> {
     let mut cur: Option<(Range<usize>, String)> = None;
@@ -549,7 +573,7 @@ impl Editor {
         if let Some(url) = self.link_ui.click.take()
             && self.core.sel.is_collapsed()
         {
-            cx.open_url(&normalize(&url));
+            open(cx, &normalize(&url));
         }
     }
 
@@ -585,7 +609,7 @@ impl Editor {
             .child(menu_item("tm-web", "globe", crate::settings::text("网页搜索")).on_click(cx.listener(|e, _, _, cx| {
                 e.menu = None;
                 let q = e.core.selected_text();
-                cx.open_url(&web_search_url(&q));
+                open(cx, &web_search_url(&q));
                 cx.notify();
             })))
     }

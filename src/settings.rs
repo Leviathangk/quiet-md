@@ -8,6 +8,7 @@ use crate::ui::{TitleBarExt, TipExt};
 use crate::sidebar as sb;
 use gpui::{prelude::FluentBuilder, *};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
@@ -25,6 +26,34 @@ pub fn english() -> bool { ENGLISH.load(Ordering::Relaxed) }
 /// 外观 › 动画 is 丰富: folding, the selection and hover animate too (else they answer at once).
 pub fn motion_high() -> bool { MOTION_HIGH.load(Ordering::Relaxed) }
 pub fn tr(zh: &'static str, en: &'static str) -> &'static str { if english() { en } else { zh } }
+
+/// Browsers 打开链接 can offer, by the name `open -a` takes. Only the ones
+/// this Mac actually has are listed; anything else is the system default.
+const BROWSERS: [&str; 8] = ["Safari", "Google Chrome", "Microsoft Edge", "Firefox", "Arc", "Brave Browser", "Vivaldi", "Opera"];
+
+/// At most this many besides 系统默认, so the row stays one line.
+const BROWSERS_SHOWN: usize = 3;
+
+/// The browsers installed here, in [`BROWSERS`] order (empty off macOS).
+pub fn browsers() -> Vec<&'static str> {
+    if !cfg!(target_os = "macos") {
+        return vec![];
+    }
+    let user = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Applications"));
+    BROWSERS
+        .into_iter()
+        .filter(|name| {
+            let app = format!("{name}.app");
+            Path::new("/Applications").join(&app).exists() || user.as_ref().is_some_and(|u| u.join(&app).exists())
+        })
+        .take(BROWSERS_SHOWN)
+        .collect()
+}
+
+/// The browser a 打开链接 segment stands for (`0`: the system default, "").
+pub fn browser_at(i: usize) -> String {
+    i.checked_sub(1).and_then(|i| browsers().get(i).copied()).unwrap_or_default().to_string()
+}
 /// Whether ⌘N should make a Markdown file: the preferred 快捷新建 type, or the
 /// last one created from the 新建 menu when no fixed type is set.
 pub fn quick_new_markdown() -> bool {
@@ -58,6 +87,9 @@ pub struct Preferences {
     pub last_new: String,
     /// 网页搜索 engine: "bing", "google", "duckduckgo"; empty is 百度.
     pub search_engine: String,
+    /// 打开链接: the browser a link opens in ("Safari", "Microsoft Edge"…),
+    /// empty for the system default.
+    pub browser: String,
     /// 外观 › 窗口背景: paint the window opaque instead of letting the desktop
     /// show through the sidebar material.
     pub opaque_window: bool,
@@ -77,7 +109,7 @@ fn system_english() -> bool {
 }
 
 impl Default for Preferences {
-    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: system_english(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), motion: String::new(), new_default: String::new(), last_new: String::new(), search_engine: String::new(), opaque_window: false, ui_font: String::new() } }
+    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: system_english(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), motion: String::new(), new_default: String::new(), last_new: String::new(), search_engine: String::new(), browser: String::new(), opaque_window: false, ui_font: String::new() } }
 }
 
 impl Preferences {
@@ -632,6 +664,22 @@ impl Workspace {
 
     fn general_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = prefs();
+        // 打开链接: which browser a clicked link (and 网页搜索) opens in. The
+        // list is what this Mac has, so the row is only there when there is a
+        // choice to make.
+        let browsers = browsers();
+        let links = if browsers.is_empty() {
+            vec![]
+        } else {
+            let sel = browsers.iter().position(|b| *b == p.browser).map_or(0, |i| i + 1);
+            let labels: Vec<&'static str> = std::iter::once(tr("系统默认", "Default")).chain(browsers.iter().copied()).collect();
+            vec![row(tr("打开链接", "Open links"), desc(tr("点击链接时用哪个浏览器打开；网页搜索也用它。", "Which browser a link opens in; 网页搜索 uses it too.")), {
+                segmented("browser", &labels, sel, |w, i, cx| {
+                    let app = crate::settings::browser_at(i);
+                    w.set_pref(|p| p.browser = app.clone(), cx)
+                }, cx)
+            }).into_any_element()]
+        };
         div().w_full().flex().flex_col().gap(px(28.))
             .child(group(None, vec![
                 row(tr("界面语言", "Interface language"), None,
@@ -652,7 +700,7 @@ impl Workspace {
                     segmented("search-engine", &[tr("百度", "Baidu"), "Bing", "Google", "DuckDuckGo"], sel,
                         |w, i, cx| w.set_pref(|p| p.search_engine = ["", "bing", "google", "duckduckgo"][i].into(), cx), cx)
                 }).into_any_element(),
-            ]))
+            ].into_iter().chain(links).collect()))
             .into_any_element()
     }
 
