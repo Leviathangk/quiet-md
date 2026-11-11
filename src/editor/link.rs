@@ -585,7 +585,7 @@ impl Editor {
             .child(menu_item("tm-web", "globe", crate::settings::text("网页搜索")).on_click(cx.listener(|e, _, _, cx| {
                 e.menu = None;
                 let q = e.core.selected_text();
-                cx.open_url(&format!("https://www.baidu.com/s?wd={}", encode_query(&q)));
+                cx.open_url(&web_search_url(&q));
                 cx.notify();
             })))
     }
@@ -602,6 +602,17 @@ fn encode_query(s: &str) -> String {
         }
     }
     out
+}
+
+/// 网页搜索: the site is a preference (设置 › 通用), 百度 by default.
+fn web_search_url(s: &str) -> String {
+    let base = match crate::settings::prefs().search_engine.as_str() {
+        "bing" => "https://www.bing.com/search?q=",
+        "google" => "https://www.google.com/search?q=",
+        "duckduckgo" => "https://duckduckgo.com/?q=",
+        _ => "https://www.baidu.com/s?wd=",
+    };
+    format!("{base}{}", encode_query(s))
 }
 
 /// The app's menu row (`ui::menu_row`): 16pt glyph, 13pt label, a quiet hover.

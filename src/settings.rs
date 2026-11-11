@@ -56,6 +56,13 @@ pub struct Preferences {
     pub new_default: String,
     /// The type last created from the 新建 menu: "doc" or "markdown" (empty before any).
     pub last_new: String,
+    /// 网页搜索 engine: "bing", "google", "duckduckgo"; empty is 百度.
+    pub search_engine: String,
+    /// 外观 › 窗口背景: paint the window opaque instead of letting the desktop
+    /// show through the sidebar material.
+    pub opaque_window: bool,
+    /// 外观 › 界面字号: "small" or "large"; empty is the 13pt standard.
+    pub ui_font: String,
 }
 
 /// Pick the first supported system language; saved preferences still win.
@@ -70,7 +77,7 @@ fn system_english() -> bool {
 }
 
 impl Default for Preferences {
-    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: system_english(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), motion: String::new(), new_default: String::new(), last_new: String::new() } }
+    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: system_english(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), motion: String::new(), new_default: String::new(), last_new: String::new(), search_engine: String::new(), opaque_window: false, ui_font: String::new() } }
 }
 
 impl Preferences {
@@ -237,15 +244,15 @@ pub(crate) fn group(title: Option<&'static str>, rows: Vec<AnyElement>) -> Div {
 }
 
 pub(crate) fn caption(t: &'static str) -> Div {
-    div().px(px(4.)).text_size(px(13.)).line_height(px(18.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(t)
+    div().px(px(4.)).text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 5.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(t)
 }
 
 /// One setting: title and an optional description on the left, the control on the right.
 fn row(title: impl Into<SharedString>, desc: Option<SharedString>, control: impl IntoElement) -> Div {
     div().w_full().min_h(px(48.)).px(px(16.)).py(px(10.)).flex().items_center().justify_between().gap(px(24.))
         .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
-            .child(div().text_size(px(13.)).line_height(px(20.)).text_color(Theme::text()).child(title.into()))
-            .children(desc.map(|d| div().text_size(px(12.)).line_height(px(17.)).text_color(Theme::text_caption()).child(d))))
+            .child(div().text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).text_color(Theme::text()).child(title.into()))
+            .children(desc.map(|d| div().text_size(px(theme::ui_font_small())).line_height(px(theme::ui_font_small() + 5.)).text_color(Theme::text_caption()).child(d))))
         .child(div().flex_none().flex().items_center().gap(px(8.)).child(control))
 }
 
@@ -265,7 +272,7 @@ fn segmented(id: &'static str, labels: &[&'static str], selected: usize, on: imp
         .children(labels.iter().enumerate().map(|(i, label)| {
             let on = on.clone();
             div().id((id, i)).h_full().px(px(12.)).flex().items_center().justify_center().rounded(px(7.)).cursor_pointer()
-                .text_size(px(13.)).line_height(px(18.))
+                .text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 5.))
                 // In dark mode the picked segment is lighter than the groove (macOS: #636366).
                 .when(i == selected, |d| d.bg(if theme::dark() { theme::rgbaf(0x63, 0x63, 0x66, 1.) } else { Theme::bg_body() }).shadow(theme::shadow_button()).text_color(Theme::text()))
                 .when(i != selected, |d| d.text_color(Theme::text_caption()).hover(|s| s.text_color(Theme::text())))
@@ -277,7 +284,7 @@ fn segmented(id: &'static str, labels: &[&'static str], selected: usize, on: imp
 /// A keyboard shortcut chip; `recording` shows it waiting for keys.
 pub(crate) fn keycap(id: impl Into<ElementId>, key: &str, recording: bool) -> Stateful<Div> {
     div().id(id).flex_none().min_w(px(144.)).min_h(px(28.)).px(px(14.)).py(px(4.)).flex().items_center().justify_center().rounded(px(7.)).cursor_pointer()
-        .text_size(px(12.)).line_height(px(16.))
+        .text_size(px(theme::ui_font_small())).line_height(px(theme::ui_font_small() + 4.))
         .when(recording, |d| d.bg(crate::theme::raised(Theme::bg_body())).border_1().border_color(Theme::primary()).text_color(Theme::primary()).child(if key.is_empty() { tr("按下新的组合键…", "Press keys…").to_string() } else { crate::shortcuts::pretty(key) }))
         .when(!recording, |d| d.bg(Theme::fill_hover()).border_1().border_color(transparent_black()).text_color(Theme::text()).hover(|s| s.bg(Theme::fill_hover_strong())).child(crate::shortcuts::pretty(key)))
 }
@@ -285,7 +292,7 @@ pub(crate) fn keycap(id: impl Into<ElementId>, key: &str, recording: bool) -> St
 /// A small text button (恢复默认 …).
 pub(crate) fn link_button(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
     div().id(id).flex_none().h(px(26.)).px(px(10.)).flex().items_center().rounded(px(7.)).cursor_pointer()
-        .text_size(px(12.)).line_height(px(16.)).text_color(Theme::primary()).hover(|s| s.bg(Theme::fill_hover()))
+        .text_size(px(theme::ui_font_small())).line_height(px(theme::ui_font_small() + 4.)).text_color(Theme::primary()).hover(|s| s.bg(Theme::fill_hover()))
         .child(label)
 }
 
@@ -293,7 +300,7 @@ pub(crate) fn button(id: impl Into<ElementId>, label: &'static str) -> Stateful<
     div().id(id).flex_none().h(px(28.)).px(px(12.)).flex().items_center().justify_center().rounded(px(8.)).cursor_pointer()
         .bg(crate::theme::raised(Theme::bg_body())).border_1().border_color(Theme::button_border()).shadow(theme::shadow_button())
         .hover(|s| s.bg(theme::c(craft::N100))).active(|s| s.bg(theme::c(craft::N200)))
-        .text_size(px(13.)).line_height(px(18.)).text_color(Theme::text()).child(label)
+        .text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 5.)).text_color(Theme::text()).child(label)
 }
 
 // ---- theme preview
@@ -418,7 +425,7 @@ fn popup_button(id: impl Into<ElementId>, label: impl Into<SharedString>, open: 
     div().id(id).flex_none().max_w(px(220.)).h(px(28.)).pl(px(12.)).pr(px(8.)).flex().items_center().gap(px(6.)).rounded(px(8.)).cursor_pointer()
         .bg(if open { theme::c(craft::N100) } else { Theme::bg_body() }).border_1().border_color(Theme::button_border()).shadow(theme::shadow_button())
         .hover(|s| s.bg(theme::c(craft::N100))).active(|s| s.bg(theme::c(craft::N200)))
-        .text_size(px(13.)).line_height(px(18.)).text_color(Theme::text())
+        .text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 5.)).text_color(Theme::text())
         .child(div().min_w_0().truncate().child(label.into()))
         .child(ui::icon("chevron-down", 12., Theme::icon()))
 }
@@ -551,7 +558,7 @@ impl Workspace {
             let on = if page.is_some() { page == current } else { in_trash };
             let (title, icon) = page.map_or((tr("回收站", "Trash"), "bin"), |p| (p.title(), p.icon()));
             div().id(SharedString::from(format!("settings-nav-{page:?}"))).h(px(sb::ROW_H)).flex().items_center().pl(px(6.)).pr(px(4.)).rounded(px(sb::ROW_R))
-                .text_size(px(13.)).line_height(px(20.)).cursor_pointer()
+                .text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).cursor_pointer()
                 .when(on, |d| d.bg(Theme::sidebar_selected()).text_color(Theme::text()))
                 .when(!on, |d| d.text_color(Theme::sidebar_text()).hover(|s| s.bg(Theme::sidebar_hover())))
                 .child(div().size(px(20.)).flex_none().flex().items_center().justify_center().mr(px(9.)).child(ui::icon(icon, sb::ROW_ICON, Theme::icon())))
@@ -566,7 +573,7 @@ impl Workspace {
             // 主页's, not a section header's: the 34pt box keeps the rows below.
             .child(div().pt(px(8.)).px(px(sb::SB_X)).flex().flex_col()
                 .child(div().h(px(sb::SECTION_H)).pl(px(4.)).pt(px((sb::SECTION_TOP + sb::SECTION_H) / 2. - sb::ROW_H / 2.))
-                    .child(div().px(px(4.)).text_size(px(13.)).line_height(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(tr("设置", "Settings"))))
+                    .child(div().px(px(4.)).text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(tr("设置", "Settings"))))
                 .child(div().flex().flex_col().gap(px(sb::ROW_GAP)).children(NAV.iter().map(|p| nav_row(*p, cx)).collect::<Vec<_>>())))
             // Where 设置 was: 返回, back to the page 设置 was opened from.
             .child(div().flex_1())
@@ -638,6 +645,13 @@ impl Workspace {
                     segmented("quick-new", &[tr("记住上次", "Last used"), tr("文档", "Document"), "Markdown"], sel,
                         |w, i, cx| w.set_pref(|p| p.new_default = ["", "doc", "markdown"][i].into(), cx), cx)
                 }).into_any_element(),
+                // 网页搜索 opens the selection in the browser; which site is the
+                // user's habit, so it is a preference rather than a constant.
+                row(tr("网页搜索", "Web search"), desc(tr("选中文字后「网页搜索」用哪个网站。", "Which site 网页搜索 opens the selected text in.")), {
+                    let sel = match p.search_engine.as_str() { "bing" => 1, "google" => 2, "duckduckgo" => 3, _ => 0 };
+                    segmented("search-engine", &[tr("百度", "Baidu"), "Bing", "Google", "DuckDuckGo"], sel,
+                        |w, i, cx| w.set_pref(|p| p.search_engine = ["", "bing", "google", "duckduckgo"][i].into(), cx), cx)
+                }).into_any_element(),
             ]))
             .into_any_element()
     }
@@ -685,6 +699,20 @@ impl Workspace {
                     row(tr("动画", "Animation"), Some(tr("克制：切换即时，只有拖拽带动画。丰富：展开收起、选中和悬停也带动画。", "Low: switching is instant, only dragging animates. High: folding, selection and hover animate too.").into()),
                         segmented("motion", &[tr("克制", "Low"), tr("丰富", "High")], usize::from(prefs().motion == "high"),
                             |w, i, cx| w.set_pref(|p| p.motion = ["", "high"][i].into(), cx), cx)).into_any_element(),
+                    // 窗口背景: the sidebar sits on the desktop material by
+                    // default; a busy wallpaper behind it can be distracting.
+                    row(tr("窗口背景", "Window background"), Some(tr("默认让侧栏透出桌面的毛玻璃。开启后整个窗口不透明，背景里动的东西不会透进来。", "By default the sidebar shows the desktop through a frosted surface. Turn this on for an opaque window.").into()),
+                        switch("pref-opaque", prefs().opaque_window).on_click(cx.listener(|w, _, window, cx| {
+                            w.set_pref(|p| p.opaque_window = !p.opaque_window, cx);
+                            window.refresh();
+                        }))).into_any_element(),
+                    // 界面字号: the sidebar and this page together, so the pairs
+                    // (label, description) stay in proportion.
+                    row(tr("界面字号", "Interface size"), None, {
+                        let sel = match prefs().ui_font.as_str() { "small" => 0, "large" => 2, _ => 1 };
+                        segmented("ui-font", &[tr("小", "Small"), tr("标准", "Default"), tr("大", "Large")], sel,
+                            |w, i, cx| w.set_pref(|p| p.ui_font = ["small", "", "large"][i].into(), cx), cx)
+                    }).into_any_element(),
                     row(tr("文档主题", "Document theme"), None, picker).into_any_element(),
                     sample.into_any_element(),
                     row(tr("主题 CSS", "Theme CSS"), Some(where_),
@@ -694,7 +722,7 @@ impl Workspace {
                             .child(button("theme-duplicate", tr("复制为新主题", "Duplicate")).on_click(cx.listener(move |w, _, _, cx| w.duplicate_theme(&dup_id, cx))))
                             .child(button("theme-edit", tr("编辑 CSS", "Edit CSS")).on_click(cx.listener(move |w, _, _, cx| w.edit_theme(&edit_id, cx))))).into_any_element(),
                 ]))
-                .children(errors.into_iter().chain(warnings.into_iter().take(8).map(|w| format!("{}：{w}", tr("未生效", "Ignored")))).map(|e| div().px(px(4.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::danger()).child(e)))
+                .children(errors.into_iter().chain(warnings.into_iter().take(8).map(|w| format!("{}：{w}", tr("未生效", "Ignored")))).map(|e| div().px(px(4.)).text_size(px(theme::ui_font_small())).line_height(px(theme::ui_font_small() + 6.)).text_color(Theme::danger()).child(e)))
                 )
             .into_any_element()
     }
@@ -721,8 +749,8 @@ impl Workspace {
         div().w_full().flex().flex_col().gap(px(28.)).child(div().w_full().pt(px(24.)).flex().flex_col().items_center().gap(px(10.))
             .child(img(about_icon()).size(px(88.)))
             .child(div().text_size(px(20.)).line_height(px(26.)).font_weight(FontWeight::SEMIBOLD).child("Quiet.md"))
-            .child(div().text_size(px(13.)).line_height(px(18.)).text_color(Theme::text_caption()).child(format!("{} {}", tr("版本", "Version"), env!("CARGO_PKG_VERSION"))))
-            .child(div().text_size(px(13.)).line_height(px(20.)).text_color(Theme::text_caption()).child(tr("本地优先的笔记应用：无需账号，文档就是你电脑上的文件。", "Local-first notes: no account, your documents are files on your Mac."))))
+            .child(div().text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 5.)).text_color(Theme::text_caption()).child(format!("{} {}", tr("版本", "Version"), env!("CARGO_PKG_VERSION"))))
+            .child(div().text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).text_color(Theme::text_caption()).child(tr("本地优先的笔记应用：无需账号，文档就是你电脑上的文件。", "Local-first notes: no account, your documents are files on your Mac."))))
             .child(group(None, vec![update_row(cx).into_any_element()]))
             .into_any_element()
     }
@@ -745,7 +773,7 @@ pub(crate) fn update_pill(cx: &mut Context<Workspace>) -> Option<AnyElement> {
     let fill = if let State::Downloading(m) = &state { Some(crate::update::progress(m)) } else { None };
     let busy = matches!(state, State::Downloading(_) | State::Installing(_));
     Some(div().id("update-pill").no_drag().flex_shrink().min_w_0().h(px(24.)).px(px(10.)).relative().overflow_hidden().flex().items_center().justify_center().rounded_full()
-        .text_size(px(12.)).line_height(px(16.)).font_weight(FontWeight::MEDIUM)
+        .text_size(px(theme::ui_font_small())).line_height(px(theme::ui_font_small() + 4.)).font_weight(FontWeight::MEDIUM)
         .when(!busy, |d| d.cursor_pointer().bg(Theme::primary()).text_color(gpui::white()).hover(|s| s.opacity(0.9)))
         .when(busy, |d| d.bg(Theme::sidebar_hover()).text_color(Theme::text_caption()))
         // Downloading: a fixed width (no jitter as the digits change), filled left
