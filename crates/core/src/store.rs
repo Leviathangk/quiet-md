@@ -454,7 +454,11 @@ impl Store {
     /// `text` (a file's contents) as a document.
     fn parse_doc(&self, id: &str, text: &str) -> Result<Document> {
         if !self.is_markdown(id) { return docxml::parse(text); }
-        Ok(crate::markdown::parse_file(text, &self.markdown_title(id), self.base(id).as_deref()))
+        let mut doc = crate::markdown::parse_file(text, &self.markdown_title(id), self.base(id).as_deref());
+        // Images a Markdown file carries inline (#133) become assets, so the
+        // page shows them and an export writes them like any other picture.
+        crate::data_images::absorb(&mut doc.blocks, &self.root);
+        Ok(doc)
     }
 
     /// `doc` as `id`'s file contents; a Markdown file keeps the front matter it has on disk.
