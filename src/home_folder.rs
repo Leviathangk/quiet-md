@@ -250,8 +250,12 @@ fn glass(o: Point<Pixels>, p: &Pose, window: &mut Window) {
 
 impl Workspace {
     fn folder_papers(&self, id: &str, front: Option<&String>) -> (Vec<Entry>, usize) {
-        let mut kids: Vec<Entry> = self.entries.iter().filter(|e| e.meta.parent.as_deref() == Some(id)).cloned().collect();
+        let kids: Vec<Entry> = self.entries.iter().filter(|e| e.meta.parent.as_deref() == Some(id)).cloned().collect();
         let n = kids.len();
+        // Papers stand for documents. A child folder drawn as one reads as a
+        // note with the folder's name on it, so only documents are painted;
+        // a folder holding nothing but folders shows an empty card.
+        let mut kids: Vec<Entry> = kids.into_iter().filter(|e| e.meta.folder.is_none()).collect();
         kids.sort_by(|a, b| {
             let lead = |e: &Entry| front.is_some_and(|f| *f == e.id);
             lead(b).cmp(&lead(a)).then(b.meta.opened.max(b.meta.modified).cmp(&a.meta.opened.max(a.meta.modified)))
