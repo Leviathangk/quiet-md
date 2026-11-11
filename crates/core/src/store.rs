@@ -167,6 +167,11 @@ pub struct Settings {
     /// Main window size, remembered like the quick note window's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_size: Option<[f32; 2]>,
+    /// 阅读位置: the list offset each document was left at, so switching back
+    /// returns to the same place. Kept out of `index.json`: it is window
+    /// state, not document metadata.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub scroll_top: HashMap<String, [f32; 2]>,
 }
 
 /// A document in the 回收站, as kept in `trash/index.json`.
@@ -949,6 +954,28 @@ impl Store {
 
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
         write_atomic(&self.root.join("settings.json"), &serde_json::to_vec_pretty(s)?)
+    }
+
+    /// 阅读位置: the list offset this document was left at.
+    pub fn scroll_top(&self, id: &str) -> Option<(usize, f32)> {
+        let v = self.settings().scroll_top.get(id).copied()?;
+        Some((v[0] as usize, v[1]))
+    }
+
+    /// Remember — or, with `None`, forget — where a document was left.
+    pub fn remember_scroll(&self, id: &str, top: Option<(usize, f32)>) -> Result<()> {
+        let mut s = self.settings();
+        match top {
+            Some((ix, y)) => {
+                let v = [ix as f32, y];
+                if s.scroll_top.get(id) == Some(&v) { return Ok(()) }
+                s.scroll_top.insert(id.to_string(), v);
+            }
+            None => {
+                if s.scroll_top.remove(id).is_none() { return Ok(()) }
+            }
+        }
+        self.save_settings(&s)
     }
 
     /// 重命名 a document that isn't open: rewrite its title on disk.

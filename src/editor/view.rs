@@ -236,6 +236,9 @@ pub struct Editor {
     pub(super) ro_doc: Option<crate::model::Document>,
     /// The 文档信息 row under the title.
     pub info: crate::store::InfoRow,
+    /// 阅读位置: where to put the page once this document's rows are laid out
+    /// (item index, offset in item). Applied by the next render, then dropped.
+    pub restore_top: Option<(usize, f32)>,
     _subs: Vec<Subscription>,
 }
 
@@ -438,6 +441,7 @@ impl Editor {
             markdown: false,
             ro_doc: None,
             info: Default::default(),
+            restore_top: None,
             cd,
             btn,
             rm,
@@ -453,6 +457,13 @@ impl Editor {
     }
 
     // ---- bookkeeping
+
+    /// 阅读位置: the top row and how far into it the page sits. `None` at the
+    /// very top, so a document that was never scrolled keeps no entry.
+    pub fn scroll_top(&self) -> Option<(usize, f32)> {
+        let top = self.list.logical_scroll_top();
+        (top.item_ix > 0 || top.offset_in_item > px(0.)).then(|| (top.item_ix, f32::from(top.offset_in_item)))
+    }
 
     pub fn restart_blink(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.caret_visible = true;

@@ -1103,6 +1103,14 @@ impl Editor {
                 });
             }
         }
+        // 阅读位置: the document reopens where it was left. Applied here, after
+        // the rows are known, because the item count is what `scroll_to` clamps
+        // against.
+        if let Some((ix, y)) = self.restore_top.take()
+            && ix < keys.len()
+        {
+            self.list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(y) });
+        }
         self.items = items;
         self.item_keys = keys;
     }
