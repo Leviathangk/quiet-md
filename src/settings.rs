@@ -718,11 +718,21 @@ impl Workspace {
     }
 
     fn about_page(&self, cx: &mut Context<Self>) -> AnyElement {
+        let location = match std::env::consts::OS {
+            "macos" => tr("你的 Mac", "your Mac"),
+            "linux" => "Linux",
+            _ => tr("你的电脑", "your computer"),
+        };
+        let tagline = crate::localized_format!(
+            "本地优先的笔记应用：无需账号，文档就是{}上的文件。",
+            "Local-first notes: no account, your documents are files on {}.",
+            location
+        );
         div().w_full().flex().flex_col().gap(px(28.)).child(div().w_full().pt(px(24.)).flex().flex_col().items_center().gap(px(10.))
             .child(img(about_icon()).size(px(88.)))
             .child(div().text_size(px(20.)).line_height(px(26.)).font_weight(FontWeight::SEMIBOLD).child("Quiet.md"))
             .child(div().text_size(px(13.)).line_height(px(18.)).text_color(Theme::text_caption()).child(format!("{} {}", tr("版本", "Version"), env!("CARGO_PKG_VERSION"))))
-            .child(div().text_size(px(13.)).line_height(px(20.)).text_color(Theme::text_caption()).child(tr("本地优先的笔记应用：无需账号，文档就是你电脑上的文件。", "Local-first notes: no account, your documents are files on your Mac."))))
+            .child(div().text_size(px(13.)).line_height(px(20.)).text_color(Theme::text_caption()).child(tagline)))
             .child(group(None, vec![update_row(cx).into_any_element()]))
             .into_any_element()
     }
