@@ -104,6 +104,9 @@ pub enum Menu {
 
 pub type BoundsMap = Rc<RefCell<HashMap<BlockId, Bounds<Pixels>>>>;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScrollIntent { RevealCaret, PreserveViewport }
+
 pub struct Editor {
     pub core: Core,
     pub focus: FocusHandle,
@@ -515,7 +518,17 @@ impl Editor {
     }
 
     pub fn changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.core.reveal_caret();
+        self.changed_with_scroll(ScrollIntent::RevealCaret, window, cx);
+    }
+
+    /// Pointer edits to an independent target must not scroll to an old caret.
+    pub(super) fn changed_preserving_viewport(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.changed_with_scroll(ScrollIntent::PreserveViewport, window, cx);
+    }
+
+    fn changed_with_scroll(&mut self, intent: ScrollIntent, window: &mut Window, cx: &mut Context<Self>) {
+        let reveal = intent == ScrollIntent::RevealCaret;
+        if reveal { self.core.reveal_caret(); }
         if self.core.dirty {
             // The rows move under the caret: an old row end no longer applies.
             self.caret_row_end = None;
@@ -526,12 +539,15 @@ impl Editor {
             self.refresh_find(false, cx);
         }
         // A folded code block opens once the caret is inside it.
-        if !self.core.in_block_mode() {
+        if reveal && !self.core.in_block_mode() {
             self.code_folded.remove(&self.core.sel.head.block);
         }
         self.sync_slash();
         self.sync_mention();
-        self.autoscroll = true;
+        self.autoscroll = reveal;
+        if !reveal && matches!(self.reveal, Some((super::render::Reveal::Caret, _))) {
+            self.reveal = None;
+        }
         self.restart_blink(window, cx);
         cx.notify();
     }
@@ -1129,7 +1145,7 @@ impl Editor {
             let picked = (*emoji != old).then(|| emoji.clone());
             super::emoji::save_callout(name(bg).as_deref(), name(border).as_deref(), picked.as_deref());
         }
-        self.changed(window, cx);
+        self.changed_preserving_viewport(window, cx);
     }
 
     pub fn toggle_mark(&mut self, which: Mark, window: &mut Window, cx: &mut Context<Self>) {

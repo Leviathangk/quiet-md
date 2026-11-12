@@ -1873,7 +1873,7 @@ impl Editor {
                             cx.stop_propagation();
                             e.menu = None;
                             e.core.table_set_valign(value);
-                            e.changed(window, cx);
+                            e.changed_preserving_viewport(window, cx);
                         }),
                     )
                 };
@@ -1913,7 +1913,7 @@ impl Editor {
                 cx.stop_propagation();
                 e.menu = None;
                 e.core.table_set_bg(v.clone());
-                e.changed(window, cx);
+                e.changed_preserving_viewport(window, cx);
             })
         };
         let mut grid = div().flex().flex_wrap().justify_between().gap_y(px(4.));
