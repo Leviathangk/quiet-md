@@ -151,6 +151,9 @@ pub struct Editor {
     pub caret_visible: bool,
     blink: Option<Task<()>>,
     pub goal_x: Option<Pixels>,
+    /// The caret was placed on a wrap boundary from the row above: draw it at
+    /// that row's end instead of the next row's start (same text offset).
+    pub(super) caret_row_end: Option<(BlockId, usize)>,
     pub slash: Option<Slash>,
     pub menu: Option<Menu>,
     pub menu_hovered: bool,
@@ -383,6 +386,7 @@ impl Editor {
             caret_visible: true,
             blink: None,
             goal_x: None,
+            caret_row_end: None,
             slash: None,
             menu: None,
             menu_hovered: false,
@@ -502,6 +506,8 @@ impl Editor {
     pub fn changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.core.reveal_caret();
         if self.core.dirty {
+            // The rows move under the caret: an old row end no longer applies.
+            self.caret_row_end = None;
             self.core.dirty = false;
             self.typing = true;
             self.hide_link_card(cx);
@@ -567,6 +573,7 @@ impl Editor {
 
     pub(super) fn set_caret(&mut self, p: Pos, extend: bool) {
         self.core.cell_sel = None;
+        self.caret_row_end = None;
         if extend {
             self.core.sel.head = p;
         } else {
@@ -1208,6 +1215,18 @@ impl Editor {
         let Some(i) = us.iter().position(|u| u.id == h.block) else { return };
         if us[i].text {
             let text = self.core.text_of(h.block).map(|t| t.text.clone()).unwrap_or_default();
+            // A wrap boundary is two caret stops: the end of the row above and
+            // the start of the row below, at the same offset.
+            let at_row_end = self.caret_row_end == Some((h.block, h.offset));
+            let starts_row = self.cache.borrow().get(&h.block).is_some_and(|l| l.starts_row(h.offset));
+            if !word && right && at_row_end {
+                return self.set_caret(Pos::new(h.block, h.offset), extend);
+            }
+            if !word && !right && starts_row && !at_row_end && h.offset > 0 {
+                self.set_caret(Pos::new(h.block, h.offset), extend);
+                self.caret_row_end = Some((h.block, h.offset));
+                return;
+            }
             if right && h.offset < text.len() {
                 let o = if word { core::next_word(&text, h.offset) } else { core::next_grapheme(&text, h.offset) };
                 return self.set_caret(Pos::new(h.block, o), extend);
@@ -1236,18 +1255,23 @@ impl Editor {
         let cache = cache.borrow();
         let goal = self
             .goal_x
-            .or_else(|| cache.get(&h.block).map(|l| l.position_for(h.offset).x))
+            .or_else(|| {
+                cache.get(&h.block).map(|l| {
+                    if self.caret_row_end == Some((h.block, h.offset)) { l.position_at_row_end(h.offset).x } else { l.position_for(h.offset).x }
+                })
+            })
             .unwrap_or_default();
         if us[i].text
             && let Some(l) = cache.get(&h.block)
             && !l.rows.is_empty()
         {
-            let ri = l.row_index_for(h.offset);
+            let ri = l.row_index_for_caret(h.offset, self.caret_row_end == Some((h.block, h.offset)));
             let target = if down { (ri + 1 < l.rows.len()).then_some(ri + 1) } else { ri.checked_sub(1) };
             if let Some(t) = target {
-                let o = l.index_in_row(t, goal);
+                let (o, at_row_end) = l.caret_in_row(t, goal);
                 drop(cache);
                 self.set_caret(Pos::new(h.block, o), extend);
+                self.caret_row_end = at_row_end.then_some((h.block, o));
                 self.goal_x = Some(goal);
                 return;
             }
@@ -1293,29 +1317,27 @@ impl Editor {
 
     fn line_edge(&mut self, end: bool, extend: bool) {
         let h = self.core.sel.head;
-        let o = {
+        let (o, at_row_end) = {
             let cache = self.cache.borrow();
             match cache.get(&h.block) {
                 Some(l) if !l.rows.is_empty() => {
-                    let ri = l.row_index_for(h.offset);
-                    if end {
-                        let r = &l.rows[ri];
-                        let last_of_hard = l.rows.get(ri + 1).is_none_or(|n| n.hard != r.hard);
-                        if last_of_hard { r.range.end } else { l.index_in_row(ri, px(1.0e6)) }
-                    } else {
-                        l.rows[ri].range.start
-                    }
+                    let ri = l.row_index_for_caret(h.offset, self.caret_row_end == Some((h.block, h.offset)));
+                    let r = &l.rows[ri];
+                    // The end of a wrapped row is a caret stop of its own: the
+                    // caret stays on this row instead of the next one's start.
+                    if end { (r.range.end, l.row_wraps(ri)) } else { (r.range.start, false) }
                 }
                 _ => {
                     if end {
-                        self.core.len_of(h.block)
+                        (self.core.len_of(h.block), false)
                     } else {
-                        0
+                        (0, false)
                     }
                 }
             }
         };
         self.set_caret(Pos::new(h.block, o), extend);
+        self.caret_row_end = at_row_end.then_some((h.block, o));
     }
 
     // ---- action handlers
@@ -2164,14 +2186,16 @@ impl Editor {
 
     // ---- mouse
 
-    fn pos_at(&self, p: Point<Pixels>) -> Option<Pos> {
+    /// The text position under `p`, and whether it is the end of a wrapped row
+    /// (the caret is drawn there rather than at the next row's start).
+    fn pos_at(&self, p: Point<Pixels>) -> Option<(Pos, bool)> {
         let us = self.core.units();
         let atomic = {
             let bb = self.block_bounds.borrow();
             us.iter().filter(|u| !u.text).find(|u| bb.get(&u.id).is_some_and(|b| b.contains(&p))).map(|u| u.id)
         };
         if let Some(id) = atomic {
-            return Some(Pos::new(id, 0));
+            return Some((Pos::new(id, 0), false));
         }
         // A pinned header row covers the rows scrolled under it.
         let pinned = self.tables.stuck.borrow().iter().find(|(_, b)| b.contains(&p)).map(|(t, _)| *t);
@@ -2179,7 +2203,7 @@ impl Editor {
             Some(t) => super::table::first_row_text(t),
             None => us.iter().filter(|u| u.text).map(|u| u.id).collect(),
         };
-        let mut pos = hit_test(&self.cache, p, &ids)?;
+        let (mut pos, mut at_row_end) = hit_test(&self.cache, p, &ids)?;
         // In a tall row, the nearest text can belong to a different cell.
         // Resolve the clicked grid slot first so a click starts in that cell.
         if let Some((table, _, _)) = self.core.cell_of(pos.block)
@@ -2190,18 +2214,18 @@ impl Editor {
         {
             let (r, c) = t.origin(if pinned == Some(table) { 0 } else { r }, c);
             let cell_ids: Vec<_> = ids.iter().copied().filter(|id| self.core.cell_of(*id) == Some((table, r, c))).collect();
-            if let Some(cell_pos) = hit_test(&self.cache, p, &cell_ids) {
+            if let Some((cell_pos, cell_row_end)) = hit_test(&self.cache, p, &cell_ids) {
                 let last = cell_ids.iter().rev().find(|id| self.cache.borrow().contains_key(id)).copied();
-                pos = if let Some(id) = last
+                (pos, at_row_end) = if let Some(id) = last
                     && self.cache.borrow().get(&id).is_some_and(|l| p.y > l.bounds.bottom())
                 {
-                    Pos::new(id, self.core.len_of(id))
+                    (Pos::new(id, self.core.len_of(id)), false)
                 } else {
-                    cell_pos
+                    (cell_pos, cell_row_end)
                 };
             }
         }
-        Some(Pos::new(pos.block, pos.offset.min(self.core.len_of(pos.block))))
+        Some((Pos::new(pos.block, pos.offset.min(self.core.len_of(pos.block))), at_row_end))
     }
 
     pub fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -2229,7 +2253,7 @@ impl Editor {
             self.core.clear_block_sel();
             return cx.notify();
         }
-        let Some(pos) = self.pos_at(ev.position) else { return };
+        let Some((pos, at_row_end)) = self.pos_at(ev.position) else { return };
         let eq = self.cache.borrow().get(&pos.block).and_then(|l| l.equation_at(ev.position));
         if let Some(ix) = eq
             && !ev.modifiers.shift
@@ -2258,6 +2282,7 @@ impl Editor {
             self.core.sel.head = Pos::new(pos.block, text.len());
         } else {
             self.set_caret(pos, false);
+            self.caret_row_end = at_row_end.then_some((pos.block, pos.offset));
         }
         self.dragging = ev.click_count == 1;
         self.restart_blink(window, cx);
@@ -2268,10 +2293,12 @@ impl Editor {
         if self.cell_drag_to(p, cx) {
             return;
         }
-        if let Some(pos) = self.pos_at(p)
+        if let Some((pos, at_row_end)) = self.pos_at(p)
             && pos != self.core.sel.head
         {
             self.core.sel.head = pos;
+            // Dragging to the end of a line selects up to its last character.
+            self.caret_row_end = at_row_end.then_some((pos.block, pos.offset));
             cx.notify();
         }
     }
@@ -2652,8 +2679,11 @@ impl EntityInputHandler for Editor {
         let t = self.core.text_of(head)?.text.clone();
         let cache = self.cache.borrow();
         let l = cache.get(&head)?;
-        let a = l.position_for(from16(&t, range.start));
-        let b = l.position_for(from16(&t, range.end));
+        let at = |ix: usize| {
+            if self.caret_row_end == Some((head, ix)) { l.position_at_row_end(ix) } else { l.position_for(ix) }
+        };
+        let a = at(from16(&t, range.start));
+        let b = at(from16(&t, range.end));
         let r = Bounds::from_corners(a, point(b.x.max(a.x), b.y + l.line_height));
         Some(r)
     }

@@ -251,6 +251,7 @@ impl R<'_> {
             placeholder_dx: 0.,
             selection,
             caret: caret_here.then_some(sel.head.offset),
+            caret_row_end: caret_here && self.ed.caret_row_end == Some((id, sel.head.offset)),
             marked: self.ed.marked.as_ref().filter(|(b, _)| *b == id && !self.ghost).map(|(_, r)| r.clone()),
             cache: self.cache.clone(),
             show_caret: caret_here && self.focused && self.ed.caret_visible && !self.ed.read_only,
@@ -1249,7 +1250,14 @@ impl Editor {
         let Some((req, tries)) = self.reveal.take() else { return };
         let view = self.list.viewport_bounds();
         let caret_rect = |p: Pos| {
-            self.cache.borrow().get(&p.block).map(|l| Bounds::new(l.position_for(p.offset), size(px(2.), l.line_height)))
+            self.cache.borrow().get(&p.block).map(|l| {
+                let at = if self.caret_row_end == Some((p.block, p.offset)) {
+                    l.position_at_row_end(p.offset)
+                } else {
+                    l.position_for(p.offset)
+                };
+                Bounds::new(at, size(px(2.), l.line_height))
+            })
         };
         let (block, target) = match req {
             Reveal::Caret => match self.core.block_sel {
