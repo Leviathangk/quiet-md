@@ -130,6 +130,8 @@ pub struct Editor {
     pub(super) code_rows: HashMap<BlockId, Vec<usize>>,
     /// Slash / "+" menu list (keyboard selection is kept in view).
     pub slash_scroll: ScrollHandle,
+    /// Sideways scroll of each unwrapped code block, and its scrollbar.
+    pub code_hscroll: RefCell<HashMap<BlockId, (ScrollHandle, Rc<super::scrollbar::Scrollbar>)>>,
     pub mention_scroll: ScrollHandle,
     pub links: super::links::Links,
     pub mention: Option<super::links::Mention>,
@@ -382,6 +384,7 @@ impl Editor {
             frame: Default::default(),
             code_rows: HashMap::new(),
             slash_scroll: ScrollHandle::new(),
+            code_hscroll: Default::default(),
             mention_scroll: ScrollHandle::new(),
             links: Default::default(),
             mention: None,

@@ -281,6 +281,9 @@ pub struct RichTextElement {
     /// Single-line fields keep their horizontal scroll here, so a long URL
     /// can be read and edited instead of being clipped on the right.
     pub scroll: Option<Rc<Cell<Pixels>>>,
+    /// Unwrapped text as wide as its longest line (at least the parent), for
+    /// a scroller around it: a code block that doesn't wrap (#161).
+    pub fit_content: bool,
 }
 
 pub struct Prepared {
@@ -290,6 +293,8 @@ pub struct Prepared {
     /// (height, base_dy) of every row, in order.
     rows: Vec<(Pixels, Pixels)>,
     height: Pixels,
+    /// The longest line, the width of a `fit_content` element.
+    width: Pixels,
     eqs: Vec<Rc<EqGeom>>,
 }
 
@@ -848,7 +853,8 @@ impl Element for RichTextElement {
         let eq_counter = self.eq_counter;
         let spec = self.spec.clone();
         let mut style = Style::default();
-        style.size.width = relative(1.).into();
+        let fit = self.fit_content && !wrap;
+        if fit { style.min_size.width = relative(1.).into(); style.flex_shrink = 0.; } else { style.size.width = relative(1.).into() }
         let st = state.clone();
         let layout_id = window.request_measured_layout(style, move |known, available, window, _cx| {
             let wrap_width = if wrap {
@@ -862,7 +868,7 @@ impl Element for RichTextElement {
             if let Some(p) = st.borrow().as_ref()
                 && p.wrap_width == wrap_width
             {
-                return size(known.width.unwrap_or(px(0.)), p.height);
+                return size(known.width.unwrap_or(if fit { p.width } else { px(0.) }), p.height);
             }
             let custom = spacing != px(0.) || !eq_src.is_empty();
             let mut lines = window
@@ -933,7 +939,7 @@ impl Element for RichTextElement {
             if out.is_empty() {
                 h = line_height;
             }
-            *st.borrow_mut() = Some(Prepared { lines: out, wrap_width, line_height, rows, height: h, eqs });
+            *st.borrow_mut() = Some(Prepared { lines: out, wrap_width, line_height, rows, height: h, width: w, eqs });
             size(known.width.unwrap_or(w), h)
         });
         (layout_id, state)

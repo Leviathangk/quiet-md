@@ -260,7 +260,24 @@ impl R<'_> {
             eq_counter: self.eqnos.get(&id).copied().unwrap_or(0),
             button_edit: if self.ghost { None } else { self.ed.button_preview(id) },
             scroll: None,
+            fit_content: false,
         }
+    }
+
+    /// The code column. Unwrapped code scrolls sideways in it, with the wide
+    /// table's thin scrollbar in the padding `below` the last line (#161).
+    fn code_column(&self, id: BlockId, wrap: bool, el: RichTextElement, below: f32) -> AnyElement {
+        if wrap {
+            return div().flex_1().min_w_0().overflow_hidden().child(el).into_any_element();
+        }
+        let (scroll, bar) = self.ed.code_hscroll.borrow_mut().entry(id).or_insert_with(|| (ScrollHandle::new(), Default::default())).clone();
+        div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .child(div().id(("code-scroll", id.0)).w_full().flex().overflow_x_scroll().track_scroll(&scroll).child(RichTextElement { fit_content: true, ..el }))
+            .child(super::scrollbar::table_scrollbar(scroll, bar).absolute().left_0().right_0().bottom(px(-below)).h(px(12.)))
+            .into_any_element()
     }
 
     fn caret_in_empty(&self, b: &Block) -> bool {
@@ -1019,7 +1036,7 @@ impl R<'_> {
                                         .map(|(i, n)| div().h(px(code_line * *n as f32)).child(format!("{}", i + 1))),
                                 ),
                         ))
-                        .child(div().flex_1().min_w_0().overflow_hidden().child(el)),
+                        .child(self.code_column(id, wrap, el, 12.)),
                 )
             })
             .into_any_element()
@@ -1311,6 +1328,19 @@ impl Editor {
         if d != px(0.) {
             self.list.scroll_by(d);
             window.request_animation_frame();
+        }
+        // Unwrapped code scrolls sideways to keep the caret (or find hit) in view.
+        if !matches!(req, Reveal::Block(_))
+            && let Some((scroll, _)) = self.code_hscroll.borrow().get(&block)
+        {
+            let (b, off, max) = (scroll.bounds(), scroll.offset(), scroll.max_offset().width);
+            let pad = px(16.);
+            let dx = if t.left() < b.left() + pad { b.left() + pad - t.left() } else if t.right() > b.right() - pad { b.right() - pad - t.right() } else { px(0.) };
+            let x = (off.x + dx).clamp(-max, px(0.));
+            if dx != px(0.) && x != off.x {
+                scroll.set_offset(point(x, off.y));
+                window.request_animation_frame();
+            }
         }
     }
 
@@ -2262,7 +2292,7 @@ fn code_block_feishu(&self, b: &Block, lang: &str, wrap: bool, cx: &mut Context<
                                         .map(|(i, n)| div().h(px(22. * *n as f32)).child(format!("{}", i + 1))),
                                 ),
                         )
-                        .child(div().flex_1().min_w_0().overflow_hidden().child(el)),
+                        .child(self.code_column(id, wrap, el, 14.)),
                 )
             })
             .into_any_element()
