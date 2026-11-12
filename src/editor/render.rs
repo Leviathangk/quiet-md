@@ -560,11 +560,17 @@ impl R<'_> {
                     MouseButton::Left,
                     cx.listener(move |e, _, window, cx| {
                         cx.stop_propagation();
+                        let selection = (e.core.sel, e.core.block_sel);
                         e.core.toggle_fold(id);
                         e.core.fix_selection();
                         e.keep_read_only_fold();
                         e.fold_anim = Some((id, std::time::Instant::now()));
-                        e.changed(window, cx);
+                        if selection == (e.core.sel, e.core.block_sel) {
+                            e.changed_preserving_viewport(window, cx);
+                        } else {
+                            // A caret hidden by the fold was moved to its heading.
+                            e.changed(window, cx);
+                        }
                     }),
                 )
                 .into_any_element(),
@@ -696,9 +702,7 @@ impl R<'_> {
                             cx.stop_propagation();
                             window.focus(&e.focus);
                             e.core.toggle_todo(id);
-                            e.changed(window, cx);
-                            // A task click leaves the text caret where it was, possibly off screen.
-                            e.autoscroll = false;
+                            e.changed_preserving_viewport(window, cx);
                         }),
                     )
                     .into_any_element()
@@ -964,7 +968,7 @@ impl R<'_> {
                                                 {
                                                     *wrap = !*wrap;
                                                 }
-                                                e.changed(window, cx);
+                                                e.changed_preserving_viewport(window, cx);
                                             }),
                                         ),
                                 )
@@ -1945,9 +1949,7 @@ fn list_item_feishu(&self, b: &Block, siblings: &[Block], idx: usize, env: Env, 
                             cx.stop_propagation();
                             window.focus(&e.focus);
                             e.core.toggle_todo(id);
-                            e.changed(window, cx);
-                            // A task click leaves the text caret where it was, possibly off screen.
-                            e.autoscroll = false;
+                            e.changed_preserving_viewport(window, cx);
                         }),
                     )
                     .into_any_element()
@@ -2195,7 +2197,7 @@ fn code_block_feishu(&self, b: &Block, lang: &str, wrap: bool, cx: &mut Context<
                                                 {
                                                     *wrap = !*wrap;
                                                 }
-                                                e.changed(window, cx);
+                                                e.changed_preserving_viewport(window, cx);
                                             }),
                                         ),
                                 )
