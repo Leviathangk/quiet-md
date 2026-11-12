@@ -523,6 +523,7 @@ impl Render for TextField {
             selection: (focused && !self.sel.is_empty()).then(|| self.sel.clone()),
             caret: Some(self.cursor()),
             caret_row_end: false,
+            fit_content: false,
             marked: self.marked.clone(),
             cache: self.cache.clone(),
             show_caret: focused && !self.hide_caret && self.sel.is_empty(),
