@@ -697,6 +697,8 @@ impl R<'_> {
                             window.focus(&e.focus);
                             e.core.toggle_todo(id);
                             e.changed(window, cx);
+                            // A task click leaves the text caret where it was, possibly off screen.
+                            e.autoscroll = false;
                         }),
                     )
                     .into_any_element()
@@ -1944,6 +1946,8 @@ fn list_item_feishu(&self, b: &Block, siblings: &[Block], idx: usize, env: Env, 
                             window.focus(&e.focus);
                             e.core.toggle_todo(id);
                             e.changed(window, cx);
+                            // A task click leaves the text caret where it was, possibly off screen.
+                            e.autoscroll = false;
                         }),
                     )
                     .into_any_element()

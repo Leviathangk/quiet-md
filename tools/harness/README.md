@@ -24,6 +24,7 @@ python3 tools/harness/compare.py tools/harness/examples/menus.txt <旧版二进�
 - 只移动代码、不改外观的重构（拆模块、换 token、共用组件），应当每张都是 `identical`。
 - `examples/menus.txt` 依次打开「…」菜单和页宽子菜单、编辑模式菜单、斜杠菜单、块菜单、侧栏右键菜单、帮助菜单。
 - `python3 tools/harness/table_resize.py` 在临时文档库中验证调整表格列宽时页面位置不跳动，覆盖屏幕外光标、单元格内光标、无变化拖拽、保存和撤销重做；需要 Pillow。
+- `python3 tools/harness/checkbox_toggle.py` 在临时文档库中验证点击任务框只切换完成状态，保留光标、选区和滚动位置，覆盖两种主题、嵌套、提示块、表格、保存和撤销重做；需要 Pillow。`CHECKBOX_CASES` 可指定逗号分隔的场景名。
 - `python3 tools/harness/clipboard_images.py` 用模拟剪贴板验证 TIFF 截图、图片附带文字、多图、光标处插入、保存、撤销重做，以及纯文本和富文本粘贴；需要 Pillow。
 - 比较时光标不闪烁（`FDL_NOBLINK`）。脚本开头要先把指针移到空白处，否则真实鼠标的位置会以 hover 的形式出现在截图里。
 - 旧版二进制可以这样编：`git worktree add /tmp/old <提交>`，在那里用 `CARGO_TARGET_DIR=<本仓库>/target cargo build --release --features devtools`，再把二进制复制出来。
