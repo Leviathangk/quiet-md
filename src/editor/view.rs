@@ -239,6 +239,9 @@ pub struct Editor {
     pub(super) ro_doc: Option<crate::model::Document>,
     /// The 文档信息 row under the title.
     pub info: crate::store::InfoRow,
+    /// 阅读位置: where to put the page once this document's rows are laid out
+    /// (item index, offset in item). Applied by the next render, then dropped.
+    pub restore_top: Option<(usize, f32)>,
     _subs: Vec<Subscription>,
 }
 
@@ -442,6 +445,7 @@ impl Editor {
             markdown: false,
             ro_doc: None,
             info: Default::default(),
+            restore_top: None,
             cd,
             btn,
             rm,
@@ -457,6 +461,13 @@ impl Editor {
     }
 
     // ---- bookkeeping
+
+    /// 阅读位置: the top row and how far into it the page sits. `None` at the
+    /// very top, so a document that was never scrolled keeps no entry.
+    pub fn scroll_top(&self) -> Option<(usize, f32)> {
+        let top = self.list.logical_scroll_top();
+        (top.item_ix > 0 || top.offset_in_item > px(0.)).then(|| (top.item_ix, f32::from(top.offset_in_item)))
+    }
 
     pub fn restart_blink(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.caret_visible = true;
@@ -1822,7 +1833,7 @@ impl Editor {
         self.paste(false, window, cx);
     }
 
-    /// ⌘⇧V 粘贴为纯文本.
+    /// ⌘⇧V 粘贴为纯文本: the characters as they are, no Markdown parsing.
     fn on_paste_plain(&mut self, _: &k::PastePlain, window: &mut Window, cx: &mut Context<Self>) {
         self.paste(true, window, cx);
     }
@@ -1881,9 +1892,11 @@ impl Editor {
             _ => false,
         };
         if plain {
-            // ⌘⇧V: the text only (Markdown still converts, as in the browser).
+            // ⌘⇧V: 原样粘贴. Markdown markers stay literal here — `# title`
+            // pastes as text, not as a heading. Anything that should become
+            // structure goes through ⌘V, which is the parsing path.
             if let Some(s) = text.filter(|s| !s.is_empty()) {
-                self.core.paste_markdown(&s);
+                self.core.paste_text(&s);
             }
         } else if let Some(d) = internal {
             self.core.paste_blocks(d.blocks);
