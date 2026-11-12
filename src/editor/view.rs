@@ -140,6 +140,12 @@ pub struct Editor {
     pub probes: RefCell<Vec<(super::overlays::Probe, Option<Bounds<Pixels>>)>>,
     pub marked: Option<(BlockId, Range<usize>)>,
     pub dragging: bool,
+    /// Text drag: the pointer's last position and when the page last scrolled
+    /// under it (`text_autoscroll`).
+    drag_at: Option<Point<Pixels>>,
+    drag_scrolled: Option<std::time::Instant>,
+    /// The window was active when the page first scrolled under the drag.
+    drag_active: Option<bool>,
     /// A press in the gap between blocks, for `gap_release`.
     pub gap_press: Option<Point<Pixels>>,
     pub hover: Option<BlockId>,
@@ -383,6 +389,9 @@ impl Editor {
             probes: RefCell::new(vec![]),
             marked: None,
             dragging: false,
+            drag_at: None,
+            drag_scrolled: None,
+            drag_active: None,
             gap_press: None,
             hover: None,
             hover_clipped: false,
@@ -2319,6 +2328,7 @@ impl Editor {
     }
 
     pub fn drag_to(&mut self, p: Point<Pixels>, cx: &mut Context<Self>) {
+        self.drag_at = Some(p);
         if self.cell_drag_to(p, cx) {
             return;
         }
@@ -2332,6 +2342,32 @@ impl Editor {
         }
     }
 
+    /// A text drag held near the page's top or bottom edge (or past it) scrolls
+    /// the page like a block drag does, 600px/s, and the selection follows
+    /// (#132). Runs every frame; the pointer may not move meanwhile.
+    pub(super) fn text_autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(at) = self.drag_at.filter(|_| self.dragging) else { return };
+        // Switching away mid-drag stops the page (as a block drag does).
+        let active = window.is_window_active();
+        if *self.drag_active.get_or_insert(active) && !active {
+            self.drag_scrolled = None;
+            return;
+        }
+        let v = self.list.viewport_bounds();
+        let dir = if at.y < v.top() + px(20.) { -1. } else if at.y > v.bottom() - px(20.) { 1. } else { 0. };
+        if dir == 0. {
+            self.drag_scrolled = None;
+            return;
+        }
+        // Last frame's layout already shows the rows scrolled in: extend to them.
+        self.drag_to(at, cx);
+        let now = std::time::Instant::now();
+        let dt = self.drag_scrolled.map_or(0., |t| (now - t).as_secs_f32().min(0.05));
+        self.drag_scrolled = Some(now);
+        self.list.scroll_by(px(dir * 600. * dt));
+        window.request_animation_frame();
+    }
+
     /// Mouse-up (or a move without the button) ends a text drag. Events can
     /// arrive before the frame that registers the window-level drag listeners,
     /// so the element-level handlers call this too.
@@ -2343,6 +2379,9 @@ impl Editor {
             }
             self.link_ui.click = None;
             self.dragging = false;
+            self.drag_at = None;
+            self.drag_scrolled = None;
+            self.drag_active = None;
             cx.notify();
         }
     }

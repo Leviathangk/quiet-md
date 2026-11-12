@@ -1343,6 +1343,7 @@ impl Editor {
         // Reads last frame's bar segments.
         self.table_autoscroll(window);
         self.block_autoscroll(window);
+        self.text_autoscroll(window, cx);
         self.tick_drop_flash(window);
         if let Some((_, t0)) = self.fold_anim {
             if t0.elapsed().as_secs_f32() >= 0.2 {
