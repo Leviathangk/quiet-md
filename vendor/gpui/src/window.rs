@@ -1350,6 +1350,9 @@ impl Window {
     {
         let view = cx.new(|cx| build_view(self, cx));
         self.root = Some(view.clone().into());
+        // The window's handle says what its root is: `downcast` to the new type must find it.
+        self.handle.state_type = TypeId::of::<E>();
+        cx.window_handles.insert(self.handle.id, self.handle);
         self.refresh();
         view
     }

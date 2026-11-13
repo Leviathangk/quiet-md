@@ -130,6 +130,17 @@ pub fn dialog(id: &'static str) -> Stateful<Div> {
     div().id(id).occlude().rounded(px(16.)).bg(crate::theme::raised(Theme::bg_body())).shadow(theme::shadow_dialog()).font_family(theme::UI_FONT).text_color(Theme::text())
 }
 
+/// A busy mark for a button: three short bars rising and falling in turn,
+/// for `t` seconds since it started. The caller asks for frames while it shows.
+pub fn spinner(t: f32, color: Hsla) -> Div {
+    let mut bars = div().h(px(14.)).flex().items_center().gap(px(3.));
+    for i in 0..3 {
+        let w = 0.5 + 0.5 * (std::f32::consts::TAU * (t * 1.25 - i as f32 * 0.18)).sin();
+        bars = bars.child(div().w(px(3.)).h(px(5. + 9. * w)).rounded(px(1.5)).bg(color.opacity(0.55 + 0.45 * w)));
+    }
+    bars
+}
+
 /// The primary button: the accent, a white 13pt semibold label, 30 tall, radius 9.
 pub fn primary_button(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
@@ -804,27 +815,32 @@ impl Element for UiPara {
 
 /// Paint the outside of a continuous corner, including over cover images.
 pub fn continuous_corner_mask(radius: f32, color: Hsla) -> impl IntoElement {
-    canvas(|bounds, _, _| bounds, move |_, b, window, _| {
-        let x = f32::from(b.left()); let y = f32::from(b.top());
-        let w = f32::from(b.size.width); let h = f32::from(b.size.height);
-        let r = radius.min(w / 2.).min(h / 2.);
-        let mut pb = PathBuilder::fill();
-        for (sx, sy, ux, uy, vx, vy) in [
-            (x + w - r, y, 1., 0., 0., 1.),
-            (x + w, y + h - r, 0., 1., -1., 0.),
-            (x + r, y + h, -1., 0., 0., -1.),
-            (x, y + r, 0., -1., 1., 0.),
-        ] {
-            let q = |u: f32, v: f32| point(px(sx + r * (u * ux + v * vx)), px(sy + r * (u * uy + v * vy)));
-            pb.move_to(q(0., 0.));
-            pb.line_to(q(1., 0.));
-            pb.line_to(q(1., 1.));
-            pb.cubic_bezier_to(q(std::f32::consts::FRAC_1_SQRT_2, 0.2928932), q(1., 0.7928932), q(1., 0.5857864));
-            pb.cubic_bezier_to(q(0., 0.), q(0.4142136, 0.), q(0.2071068, 0.));
-            pb.close();
-        }
-        if let Ok(path) = pb.build() { window.paint_path(path, color); }
-    }).absolute().inset_0()
+    canvas(|bounds, _, _| bounds, move |_, b, window, _| paint_corner_mask(b, radius, color, window)).absolute().inset_0()
+}
+
+/// The outside of `b`'s four continuous corners, in `color`: rounds anything
+/// painted below it on a plain background.
+pub fn paint_corner_mask(b: Bounds<Pixels>, radius: f32, color: Hsla, window: &mut Window) {
+    let x = f32::from(b.left()); let y = f32::from(b.top());
+    let w = f32::from(b.size.width); let h = f32::from(b.size.height);
+    let r = radius.min(w / 2.).min(h / 2.);
+    if r <= 0. { return }
+    let mut pb = PathBuilder::fill();
+    for (sx, sy, ux, uy, vx, vy) in [
+        (x + w - r, y, 1., 0., 0., 1.),
+        (x + w, y + h - r, 0., 1., -1., 0.),
+        (x + r, y + h, -1., 0., 0., -1.),
+        (x, y + r, 0., -1., 1., 0.),
+    ] {
+        let q = |u: f32, v: f32| point(px(sx + r * (u * ux + v * vx)), px(sy + r * (u * uy + v * vy)));
+        pb.move_to(q(0., 0.));
+        pb.line_to(q(1., 0.));
+        pb.line_to(q(1., 1.));
+        pb.cubic_bezier_to(q(std::f32::consts::FRAC_1_SQRT_2, 0.2928932), q(1., 0.7928932), q(1., 0.5857864));
+        pb.cubic_bezier_to(q(0., 0.), q(0.4142136, 0.), q(0.2071068, 0.));
+        pb.close();
+    }
+    if let Ok(path) = pb.build() { window.paint_path(path, color); }
 }
 
 /// A capsule filled to `fraction` from the left, its edge a moving wave (the
