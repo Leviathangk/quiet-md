@@ -261,7 +261,16 @@ impl Workspace {
         let path = save_path(&format!("{name}.pdf"), cx);
         let view = printing::parent_of(window);
         cx.spawn_in(window, async move |this, cx| {
-            let Some(path) = path.await else { return };
+            let Some(mut path) = path.await else { return };
+
+            let has_pdf_extension = path.extension()
+                .and_then(|ext| ext.to_str())
+                .map_or(false, |ext| ext.eq_ignore_ascii_case("pdf"));
+
+            if !has_pdf_extension {
+                path.set_extension("pdf");
+            }
+
             let _ = this.update(cx, |w, cx| w.show_toast_kind(ToastKind::Info, crate::settings::text("正在导出文档"), cx));
             let html = crate::html::to_html(&doc, &crate::html::Options { sub_pages: &subs });
             let _ = std::fs::remove_file(&path);
