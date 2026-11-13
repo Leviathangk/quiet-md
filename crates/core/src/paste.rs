@@ -836,25 +836,29 @@ fn list_item(line: &str) -> Option<(Marker, usize, &str)> {
     let ind = indent_of(line);
     let rest = line.trim_start_matches([' ', '\t']);
     let skip = line.len() - rest.len();
-    let (marker, mlen) = if let Some(c) = rest.chars().next().filter(|c| matches!(c, '-' | '*' | '+')) {
-        (Marker::Bullet, c.len_utf8())
+    // Full-width as typed with a Chinese input method: `－ ` / `＊ ` bullets, `1．` like `1。`.
+    let (marker, mlen, tight) = if let Some(c) = rest.chars().next().filter(|c| matches!(c, '-' | '*' | '+' | '－' | '＊')) {
+        (Marker::Bullet, c.len_utf8(), false)
     } else {
         let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
         if digits == 0 || digits > 9 {
             return None;
         }
         let tail = &rest[digits..];
-        let d = tail.chars().next().filter(|c| matches!(c, '.' | ')' | '。'))?;
-        (Marker::Ordered(rest[..digits].parse().ok()?), digits + d.len_utf8())
+        let d = tail.chars().next().filter(|c| matches!(c, '.' | ')' | '。' | '．'))?;
+        // `1。有序` needs no space, but `2024。` or `3．14` starts no list.
+        let next = tail[d.len_utf8()..].chars().next();
+        let tight = matches!(d, '。' | '．') && digits <= 2 && next.is_some_and(|c| !c.is_whitespace() && !c.is_ascii_digit());
+        (Marker::Ordered(rest[..digits].parse().ok()?), digits + d.len_utf8(), tight)
     };
     let after = &rest[mlen..];
-    let content = after.strip_prefix([' ', '\t'])?;
+    let content = if tight { after } else { after.strip_prefix([' ', '\t'])? };
     // `***` / `- - -` style rules are dividers, not items.
     if divider(rest) {
         return None;
     }
     let _ = skip;
-    Some((marker, ind + mlen + 1, content))
+    Some((marker, ind + mlen + usize::from(!tight), content))
 }
 
 fn divider(line: &str) -> bool {
@@ -966,9 +970,11 @@ fn md_blocks(lines: &[&str], off: Off, mut spans: Option<&mut Vec<(usize, usize)
             i += 1;
             continue;
         }
-        let hashes = body.bytes().take_while(|&b| b == b'#').count();
-        if (1..=9).contains(&hashes) && body[hashes..].starts_with([' ', '\t']) {
-            let t = body[hashes..].trim().trim_end_matches('#').trim_end();
+        // `＃` as typed with a Chinese input method counts too.
+        let hashes = body.chars().take_while(|&c| c == '#' || c == '＃').count();
+        let hlen: usize = body.chars().take(hashes).map(char::len_utf8).sum();
+        if (1..=9).contains(&hashes) && body[hlen..].starts_with([' ', '\t']) {
+            let t = body[hlen..].trim().trim_end_matches(['#', '＃']).trim_end();
             out.push(Block::new(BlockKind::Heading { level: hashes as u8, seq_auto: false }, md_inline(t)));
             i += 1;
             continue;
@@ -1067,7 +1073,7 @@ fn quote_line(s: &str) -> Option<&str> {
     if s == ">" {
         return Some("");
     }
-    if let Some(r) = s.strip_prefix('>') {
+    if let Some(r) = s.strip_prefix(['>', '\u{ff1e}']) {
         return Some(r.strip_prefix(' ').unwrap_or(r));
     }
     s.strip_prefix("》 ")
@@ -1075,18 +1081,18 @@ fn quote_line(s: &str) -> Option<&str> {
 
 fn table_cells(line: &str) -> Vec<String> {
     let t = line.trim();
-    let t = t.strip_prefix('|').unwrap_or(t);
-    let t = t.strip_suffix('|').filter(|x| !x.ends_with('\\')).unwrap_or(t);
+    let t = t.strip_prefix(['|', '\u{ff5c}']).unwrap_or(t);
+    let t = t.strip_suffix(['|', '\u{ff5c}']).filter(|x| !x.ends_with('\\')).unwrap_or(t);
     let mut cells = vec![];
     let mut cur = String::new();
     let mut chars = t.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '\\' if chars.peek() == Some(&'|') => {
+            '\\' if chars.peek() == Some(&'|') || chars.peek() == Some(&'\u{ff5c}') => {
                 cur.push('|');
                 chars.next();
             }
-            '|' => cells.push(std::mem::take(&mut cur).trim().to_string()),
+            '|' | '\u{ff5c}' => cells.push(std::mem::take(&mut cur).trim().to_string()),
             _ => cur.push(c),
         }
     }
@@ -1098,15 +1104,15 @@ fn table_cells(line: &str) -> Vec<String> {
 fn pipe_table(lines: &[&str]) -> Option<(Block, usize)> {
     let head = lines.first()?;
     let sep = lines.get(1)?;
-    if !head.contains('|') {
+    if !head.contains(['|', '\u{ff5c}']) {
         return None;
     }
     let seps = table_cells(sep);
     let ok = |c: &String| {
-        let c = c.trim_matches(':');
-        !c.is_empty() && c.chars().all(|x| x == '-')
+        let c = c.trim_matches([':', '\u{ff1a}']);
+        !c.is_empty() && c.chars().all(|x| x == '-' || x == '\u{ff0d}')
     };
-    if !seps.iter().all(ok) || !sep.contains('-') {
+    if !seps.iter().all(ok) || !sep.contains(['-', '\u{ff0d}']) {
         return None;
     }
     let header = table_cells(head);
@@ -1116,7 +1122,7 @@ fn pipe_table(lines: &[&str]) -> Option<(Block, usize)> {
     }
     let aligns: Vec<Align> = seps
         .iter()
-        .map(|c| match (c.starts_with(':'), c.ends_with(':')) {
+        .map(|c| match (c.starts_with([':', '\u{ff1a}']), c.ends_with([':', '\u{ff1a}'])) {
             (true, true) => Align::Center,
             (false, true) => Align::Right,
             _ => Align::Left,
@@ -1125,7 +1131,7 @@ fn pipe_table(lines: &[&str]) -> Option<(Block, usize)> {
     let mut n = 2;
     let mut rows = vec![header];
     while let Some(l) = lines.get(n) {
-        if l.trim().is_empty() || !l.contains('|') {
+        if l.trim().is_empty() || !l.contains(['|', '\u{ff5c}']) {
             break;
         }
         rows.push(table_cells(l));
@@ -1176,7 +1182,7 @@ fn pipe_table_widths(rows: &[Vec<TableCell>], ncols: usize) -> Vec<f32> {
 }
 
 fn is_boundary(c: Option<char>) -> bool {
-    c.is_none_or(|c| c.is_whitespace())
+    c.is_none_or(|c| c.is_whitespace() || "，。；：！？、）】》”’".contains(c))
 }
 
 /// Inline Markdown: code spans, equations, links, bare URLs and the emphasis
@@ -1263,6 +1269,18 @@ pub fn md_inline(s: &str) -> RichText {
                 continue;
             }
         }
+        if c == '\u{3010}' && let Some((label, url, used)) = cjk_link_at(rest) {
+            flush(&mut plain, &mut out);
+            let mut t = md_inline(label);
+            if t.is_empty() {
+                t = RichText::plain(url);
+            }
+            let len = t.len();
+            t.update_marks(0..len, |m| m.link = Some(url.to_string()));
+            out.append(&t);
+            i += used;
+            continue;
+        }
         // Bare URLs (they get links when drawn).
         if (c == 'h' || c == 'w') && !prev.is_some_and(|p| p.is_alphanumeric()) {
             let l = rest.get(..8).unwrap_or(rest).to_ascii_lowercase();
@@ -1278,6 +1296,26 @@ pub fn md_inline(s: &str) -> RichText {
                     continue;
                 }
             }
+        }
+        // `＊强调＊` / `＊＊加粗＊＊`: only a closed pair is emphasis; a lone `＊` stays itself.
+        if c == '＊' {
+            let n = rest.chars().take_while(|&x| x == '＊').count();
+            let run = &rest[..n * 3];
+            if n <= 3 && let Some(end) = find_wide_run(&rest[run.len()..], run) {
+                let inner = &rest[run.len()..run.len() + end];
+                if !inner.starts_with(char::is_whitespace) && !inner.ends_with(char::is_whitespace) {
+                    flush(&mut plain, &mut out);
+                    let mut t = md_inline(inner);
+                    let len = t.len();
+                    t.update_marks(0..len, |m| { m.bold |= n != 1; m.italic |= n != 2; });
+                    out.append(&t);
+                    i += run.len() * 2 + end;
+                    continue;
+                }
+            }
+            plain.push_str(run);
+            i += run.len();
+            continue;
         }
         // Emphasis.
         if matches!(c, '*' | '_' | '~') {
@@ -1320,6 +1358,17 @@ pub fn md_inline(s: &str) -> RichText {
     }
     flush(&mut plain, &mut out);
     out
+}
+
+/// `find_run` for a run of `＊` (not part of a longer one), non-empty match only.
+fn find_wide_run(s: &str, delim: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(k) = s[from..].find(delim) {
+        let at = from + k;
+        if at > 0 && !s[..at].ends_with('＊') && !s[at + delim.len()..].starts_with('＊') { return Some(at); }
+        from = at + delim.len();
+    }
+    None
 }
 
 /// Offset in `s` of a delimiter run exactly equal to `delim` (not part of a
@@ -1374,6 +1423,19 @@ fn link_at(s: &str) -> Option<(&str, &str, usize)> {
         return None;
     }
     Some((&s[1..close], url, close + 1 + 1 + end + 1))
+}
+
+/// `【label】(url)` or `【label】（url）` at the start of `s`.
+fn cjk_link_at(s: &str) -> Option<(&str, &str, usize)> {
+    let (label, tail) = s.strip_prefix('\u{3010}')?.split_once('\u{3011}')?;
+    let (inner, close_ch) = tail
+        .strip_prefix('(')
+        .map(|inner| (inner, ')'))
+        .or_else(|| tail.strip_prefix('\u{ff08}').map(|inner| (inner, '\u{ff09}')))?;
+    let end = inner.find(close_ch)?;
+    let url = inner[..end].trim();
+    let used = s.len() - inner.len() + end + close_ch.len_utf8();
+    (!url.is_empty() && (link_ok(url) || url.starts_with("www."))).then_some((label, url, used))
 }
 
 #[cfg(test)]
@@ -1527,6 +1589,48 @@ mod tests {
             assert!(t.col_widths.iter().all(|w| w.is_finite() && *w >= Table::MIN_WIDTH && *w <= 480.));
             assert!(t.col_widths.iter().sum::<f32>() <= 720f32.max(n as f32 * Table::DEFAULT_WIDTH));
         }
+    }
+
+    #[test]
+    fn markdown_chinese_punctuation() {
+        let src = "＃ 一级标题\n－ 无序列表\n1．有序列表\n＞ 引用\n｜列一｜列二｜\n｜：－：｜：－：｜\n\
+                   中文，＊强调＊，后续\n＊＊加粗＊＊\n【链接】（https://example.com）\n＊ 项目";
+        let blocks = super::markdown_to_blocks(src, Default::default());
+        let kind = |i: usize| &blocks[i].kind;
+        assert!(matches!(kind(0), crate::model::BlockKind::Heading { level: 1, .. }), "{blocks:?}");
+        assert!(matches!(kind(1), crate::model::BlockKind::Bullet), "{blocks:?}");
+        assert!(matches!(kind(2), crate::model::BlockKind::Ordered { .. }), "{blocks:?}");
+        assert!(matches!(kind(3), crate::model::BlockKind::Quote), "{blocks:?}");
+        assert!(matches!(kind(4), crate::model::BlockKind::Table(_)), "{blocks:?}");
+        assert!(matches!(kind(5), crate::model::BlockKind::Text), "{blocks:?}");
+        let text = |i: usize| blocks[i].text.text.as_str();
+        assert_eq!(text(5), "中文，强调，后续");
+        assert_eq!(text(6), "加粗");
+        assert!(blocks[7].text.runs.iter().any(|r| r.marks.link.is_some()), "{:?}", blocks[7].text);
+        assert!(matches!(kind(8), crate::model::BlockKind::Bullet), "{blocks:?}");
+    }
+
+    #[test]
+    fn markdown_chinese_punctuation_literals() {
+        let blocks = super::markdown_to_blocks("——破折号\n——\n《书名》【正文】（注释）", Default::default());
+        assert_eq!(blocks[0].text.text, "——破折号");
+        assert!(matches!(blocks[1].kind, crate::model::BlockKind::Text), "{blocks:?}");
+        assert_eq!(blocks[2].text.text, "《书名》【正文】（注释）");
+
+        let code = super::markdown_to_blocks("```\n＃ ＊x＊ ｜【a】（b）｜\n```\n`＃ ＊x＊ 【a】（b）`", Default::default());
+        assert!(matches!(code[0].kind, crate::model::BlockKind::Code { .. }), "{code:?}");
+        assert_eq!(code[0].text.text, "＃ ＊x＊ ｜【a】（b）｜");
+        assert_eq!(code[1].text.text, "＃ ＊x＊ 【a】（b）");
+        assert!(code[1].text.runs[0].marks.code, "{:?}", code[1].text.runs[0]);
+
+        // Full-width characters that aren't syntax are kept as typed.
+        let prose = super::markdown_to_blocks("价格＊2\n选项一｜选项二\n2024。今天\n3．14 是圆周率\n—— 鲁迅\n＃标题没有空格", Default::default());
+        let texts: Vec<&str> = prose.iter().map(|b| b.text.text.as_str()).collect();
+        assert_eq!(texts, ["价格＊2", "选项一｜选项二", "2024。今天", "3．14 是圆周率", "—— 鲁迅", "＃标题没有空格"], "{prose:?}");
+        assert!(prose.iter().all(|b| matches!(b.kind, crate::model::BlockKind::Text)), "{prose:?}");
+
+        let escaped = super::md_inline("\\＊不是");
+        assert_eq!(escaped.text, "\\＊不是", "{escaped:?}");
     }
 
     #[test]
