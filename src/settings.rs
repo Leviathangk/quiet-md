@@ -1,4 +1,4 @@
-//! 设置: preferences (`preferences.json` in the library root) and the
+//! 设置: preferences (`.quiet/preferences.json` in the library) and the
 //! settings view — a category list in the sidebar, one page per category,
 //! each page a column of grouped rows. Only what a
 //! user really needs to change lives here.
@@ -119,7 +119,23 @@ pub struct Preferences {
     pub opaque_window: bool,
     /// 外观 › 界面字号: "small" or "large"; empty is the 13pt standard.
     pub ui_font: String,
+    /// When 稍后 put off moving the library to real folders (Unix seconds; 0 never).
+    pub migrate_later: u64,
 }
+
+/// A week between asks to move the library to real folders.
+const MIGRATE_ASK_EVERY: u64 = 7 * 24 * 3600;
+fn unix_now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
+
+/// 稍后 on the move to real folders: remember when.
+pub fn migrate_later() {
+    let mut p = prefs();
+    p.migrate_later = unix_now();
+    let _ = save(&p);
+}
+
+/// Whether to ask about the move now: never put off, or a week since.
+pub fn migrate_ask_due() -> bool { unix_now().saturating_sub(prefs().migrate_later) >= MIGRATE_ASK_EVERY }
 
 /// Pick the first supported system language; saved preferences still win.
 fn system_lang() -> Lang {
@@ -132,7 +148,7 @@ fn system_lang() -> Lang {
 impl Default for Preferences {
     fn default() -> Self {
         let lang = system_lang();
-        Preferences { theme: String::new(), feishu: true, english: lang != Lang::Zh, language: lang.code().into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), motion: String::new(), new_default: String::new(), last_new: String::new(), search_engine: String::new(), browser: String::new(), opaque_window: false, ui_font: String::new() }
+        Preferences { theme: String::new(), feishu: true, english: lang != Lang::Zh, language: lang.code().into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), motion: String::new(), new_default: String::new(), last_new: String::new(), search_engine: String::new(), browser: String::new(), opaque_window: false, ui_font: String::new(), migrate_later: 0 }
     }
 }
 
@@ -149,7 +165,7 @@ impl Preferences {
     }
 }
 
-fn path() -> std::path::PathBuf { crate::store::Store::root_dir().join("preferences.json") }
+fn path() -> std::path::PathBuf { crate::store::Store::internal_dir().join("preferences.json") }
 
 pub fn load() {
     let p = std::fs::read(path()).ok().and_then(|b| serde_json::from_slice::<Preferences>(&b).ok()).unwrap_or_default();
@@ -204,7 +220,7 @@ pub fn prefs() -> Preferences {
 
 pub(crate) fn save(p: &Preferences) -> anyhow::Result<()> {
     use std::io::Write;
-    let root = crate::store::Store::root_dir();
+    let root = crate::store::Store::internal_dir();
     std::fs::create_dir_all(&root)?;
     let tmp = root.join("preferences.json.tmp");
     let mut f = std::fs::File::create(&tmp)?;
@@ -878,6 +894,8 @@ impl Workspace {
             .child(div().text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 5.)).text_color(Theme::text_caption()).child(format!("{} {}", tr("版本", "Version"), env!("CARGO_PKG_VERSION"))))
             .child(div().text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).text_color(Theme::text_caption()).child(tr("本地优先的笔记应用：无需账号，文档就是你电脑上的文件。", "Local-first notes: no account, your documents are files on your Mac."))))
             .child(group(None, vec![update_row(cx).into_any_element()]))
+            .child(group(None, vec![row("Onboarding", Some(tr("在这个窗口上再走一遍首次启动的欢迎页（⌘⌥⇧O）；只会应用快捷键，不改动文档库", "Go through the first-launch pages again over this window (⌘⌥⇧O); only the shortcut is applied, the library stays as it is").into()),
+                button("replay-onboarding", tr("打开", "Open")).on_click(cx.listener(|w, _, window, cx| w.replay_onboarding(window, cx)))).into_any_element()]))
             .into_any_element()
     }
 }
@@ -939,7 +957,7 @@ fn update_row(cx: &mut Context<Workspace>) -> Div {
 /// GPUI samples images bilinearly without mipmaps, so the 1024px file shrunk
 /// 5.8× on the GPU skips most of its pixels and the edges come out jagged.
 /// On a 1x screen the 2:1 step is still an exact box filter.
-fn about_icon() -> ImageSource {
+pub(crate) fn about_icon() -> ImageSource {
     const PATH: &str = "branding/app-icon.png";
     static ICON: LazyLock<Option<Arc<RenderImage>>> = LazyLock::new(|| {
         let bytes = crate::assets::Assets.load(PATH).ok()??;
