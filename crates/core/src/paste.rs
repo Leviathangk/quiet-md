@@ -1241,7 +1241,7 @@ pub fn md_inline(s: &str) -> RichText {
                     flush(&mut plain, &mut out);
                     let mut t = md_inline(inner);
                     let len = t.len();
-                    t.update_marks(0..len, |m| { if n != 1 { m.bold = true } if n != 2 { m.italic = true } });
+                    t.update_marks(0..len, |m| { m.bold |= n != 1; m.italic |= n != 2; });
                     out.append(&t);
                     i += run.len() * 2 + end;
                     continue;
