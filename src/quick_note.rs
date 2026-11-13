@@ -94,7 +94,6 @@ mod hotkey {
         fn GetEventParameter(event: Ref, name: u32, kind: u32, actual: *mut u32, size: usize, actual_size: *mut usize, data: Ref) -> i32;
         fn InstallEventHandler(target: Ref, handler: unsafe extern "C" fn(Ref, Ref, Ref) -> i32, count: u32, types: *const EventType, data: Ref, out: *mut Ref) -> i32;
         fn RegisterEventHotKey(key: u32, modifiers: u32, id: HotkeyId, target: Ref, options: u32, out: *mut Ref) -> i32;
-        fn RemoveEventHandler(handler: Ref) -> i32;
         fn UnregisterEventHotKey(key: Ref) -> i32;
     }
     thread_local! { static KEY: RefCell<(Ref, String)> = const { RefCell::new((ptr::null_mut(), String::new())) }; static LAST_KEY: RefCell<(Ref, String)> = const { RefCell::new((ptr::null_mut(), String::new())) }; static HELD: RefCell<[bool; 2]> = const { RefCell::new([false; 2]) }; static APP: RefCell<Option<AsyncApp>> = const { RefCell::new(None) }; }
