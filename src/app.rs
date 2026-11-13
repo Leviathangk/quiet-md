@@ -224,6 +224,9 @@ pub struct Workspace {
     pub theme_menu: Option<String>,
     /// Where the theme dropdown's button was drawn last frame.
     pub theme_anchor: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
+    /// 通用's language dropdown while open: the highlighted language.
+    pub lang_menu: Option<crate::settings::Lang>,
+    pub lang_anchor: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
     /// 快捷键's filter field.
     pub settings_filter: Entity<TextField>,
     native_sidebar: crate::native_header::NativeSidebar,
@@ -410,6 +413,8 @@ impl Workspace {
             settings_page: Default::default(),
             theme_menu: None,
             theme_anchor: Default::default(),
+            lang_menu: None,
+            lang_anchor: Default::default(),
             settings_filter,
             store,
             entries,
@@ -755,6 +760,7 @@ impl Workspace {
         self.row_menu = None;
         self.trash_menu = None;
         self.theme_menu = None;
+        self.lang_menu = None;
         self.home.sort_menu = false;
         cx.notify();
     }
@@ -1332,6 +1338,7 @@ impl Render for Workspace {
         let trash_menu = self.render_trash_menu(cx);
         let home_menus = self.render_home_menus(cx);
         let theme_menu = self.render_theme_menu(cx);
+        let lang_menu = self.render_lang_menu(cx);
         let toast = self.render_toast(window);
         let mode_menu = self.render_mode_menu(cx);
         let main = match self.view {
@@ -1432,7 +1439,7 @@ impl Render for Workspace {
             }))
             .on_key_down(cx.listener(|w, ev: &KeyDownEvent, window, cx| {
                 // The theme dropdown: ↑ ↓ preview, ↩ applies, Esc closes it (not 设置).
-                if w.theme_menu.is_some() && w.theme_menu_key(&ev.keystroke.key, cx) {
+                if (w.theme_menu.is_some() && w.theme_menu_key(&ev.keystroke.key, cx)) || (w.lang_menu.is_some() && w.lang_menu_key(&ev.keystroke.key, cx)) {
                     cx.stop_propagation();
                     return;
                 }
@@ -1496,6 +1503,7 @@ impl Render for Workspace {
             .children(trash_menu)
             .children(home_menus)
             .children(theme_menu)
+            .children(lang_menu)
             .children(confirm)
             .children(move_dlg)
             .children(export_md)

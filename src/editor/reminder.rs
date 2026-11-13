@@ -8,7 +8,7 @@ use super::core::Pos;
 use super::overlays::{Probe, at};
 use super::view::{Editor, Menu};
 use crate::model::InlineReminder;
-use crate::settings::{Lang, translate};
+use crate::settings::{Lang, localized, translate};
 use crate::input::{TextField, TextFieldEvent};
 use crate::editor_theme::{Theme, c, craft};
 use crate::editor_ui::{ROW_RADIUS, icon, panel, popover};
@@ -23,6 +23,8 @@ const SLOT: i64 = 30 * MINUTE;
 /// A whole-day reminder is due at 23:59:59 of its day.
 const DAY_END: i64 = DAY - 1000;
 const WEEK: [&str; 7] = ["一", "二", "三", "四", "五", "六", "日"];
+/// The weekday on its own (`WEEK` is also the calendar's column heads, too short for "This …" elsewhere).
+const WEEKDAY: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
 /// 提醒 choices of a timed reminder: notify − expire.
 const TIMED: [(&str, i64); 9] = [
@@ -92,11 +94,11 @@ fn time_string_for(expire: i64, timed: bool, now: i64, lang: Lang) -> String {
     let (ny, nm, nd) = ymd(now);
     let (e, n) = (i64::from(ed), i64::from(nd));
     let mut s = if ey != ny {
-        lang.pick(format!("{ey}年{em}月{ed}日"), format!("{ey}-{em:02}-{ed:02}"), format!("{ey}년 {em}월 {ed}일"))
+        localized(lang, "{y}年{mo}月{d}日", || format!("{ey}年{em}月{ed}日"), || format!("{ey}-{em:02}-{ed:02}"))
     } else {
         let dw = weeks(expire) - weeks(now);
         if dw >= 2 || dw <= -1 {
-            if n - e == 1 && dw == -1 && em == nm { translate("昨天", lang).into() } else { lang.pick(format!("{em}月{ed}日"), format!("{em:02}-{ed:02}"), format!("{em}월 {ed}일")) }
+            if n - e == 1 && dw == -1 && em == nm { translate("昨天", lang).into() } else { localized(lang, "{mo}月{d}日", || format!("{em}月{ed}日"), || format!("{em:02}-{ed:02}")) }
         } else if e == n {
             translate("今天", lang).into()
         } else if n - e == 1 {
@@ -104,8 +106,10 @@ fn time_string_for(expire: i64, timed: bool, now: i64, lang: Lang) -> String {
         } else if e - n == 1 {
             translate("明天", lang).into()
         } else {
-            let w = translate(WEEK[crate::time::weekday(ey, em, ed) as usize], lang);
-            if dw >= 1 { lang.pick(format!("下周{w}"), format!("Next {w}"), format!("다음 주 {w}요일")) } else { lang.pick(format!("本周{w}"), format!("This {w}"), format!("이번 주 {w}요일")) }
+            let i = crate::time::weekday(ey, em, ed) as usize;
+            // Chinese reads 下周一; elsewhere the weekday's own name fills the template.
+            let w = if lang == Lang::Zh { WEEK[i] } else { translate(WEEKDAY[i], lang) };
+            if dw >= 1 { localized(lang, "下周{w}", || format!("下周{w}"), || format!("Next {w}")) } else { localized(lang, "本周{w}", || format!("本周{w}"), || format!("This {w}")) }
         }
     };
     if timed {
@@ -251,7 +255,7 @@ pub(crate) fn reminder_label(r: &InlineReminder, sep: &str) -> String {
     let lang = crate::settings::lang();
     if lang == Lang::Zh { return r.label(sep); }
     let (y, m, d, h, mi) = crate::time::civil(r.expire.max(0) as u64 / 1000);
-    let day = if lang == Lang::Ko { format!("{y}년 {m}월 {d}일") } else { format!("{y}-{m:02}-{d:02}") };
+    let day = localized(lang, "{y}年{mo}月{d}日", || format!("{y}年{m}月{d}日"), || format!("{y}-{m:02}-{d:02}"));
     if r.whole_day { day } else { format!("{day}{sep}{h:02}:{mi:02}") }
 }
 
@@ -833,6 +837,24 @@ mod tests {
         assert_eq!(time_string_for(t(2026, 10, 27, 9, 0), false, now, Lang::Ko), "다음 주 화요일");
         assert_eq!(time_string_for(t(2026, 11, 3, 9, 0), false, now, Lang::Ko), "11월 3일");
         assert_eq!(time_string_for(t(2027, 1, 3, 9, 0), true, now, Lang::Ko), "2027년 1월 3일 09:00");
+    }
+
+    #[test]
+    fn japanese_chip_text() {
+        let now = t(2026, 10, 22, 10, 0);
+        assert_eq!(time_string_for(t(2026, 10, 23, 0, 0), false, now, Lang::Ja), "明日");
+        assert_eq!(time_string_for(t(2026, 10, 25, 9, 0), false, now, Lang::Ja), "今週日曜日");
+        assert_eq!(time_string_for(t(2026, 10, 27, 9, 0), false, now, Lang::Ja), "来週火曜日");
+        assert_eq!(time_string_for(t(2027, 1, 3, 9, 0), true, now, Lang::Ja), "2027年1月3日 09:00");
+    }
+
+    #[test]
+    fn spanish_chip_text() {
+        let now = t(2026, 10, 22, 10, 0);
+        assert_eq!(time_string_for(t(2026, 10, 25, 9, 0), false, now, Lang::Es), "Este domingo");
+        assert_eq!(time_string_for(t(2026, 10, 27, 9, 0), false, now, Lang::Es), "El próximo martes");
+        assert_eq!(time_string_for(t(2026, 11, 3, 9, 0), false, now, Lang::Es), "3/11");
+        assert_eq!(time_string_for(t(2027, 1, 3, 9, 0), true, now, Lang::Es), "3/1/2027 09:00");
     }
 
     #[test]

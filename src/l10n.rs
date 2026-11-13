@@ -4,15 +4,20 @@
 use crate::settings::Lang;
 use std::{collections::HashMap, sync::LazyLock};
 
+mod es;
+mod ja;
 mod ko;
 
 fn strings(lang: Lang) -> &'static [(&'static str, &'static str)] {
-    match lang { Lang::Ko => ko::STRINGS, Lang::Zh | Lang::En => &[] }
+    match lang { Lang::Ja => ja::STRINGS, Lang::Ko => ko::STRINGS, Lang::Es => es::STRINGS, Lang::Zh | Lang::En => &[] }
 }
 
 pub fn get(lang: Lang, zh: &str) -> Option<&'static str> {
-    static KO: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| ko::STRINGS.iter().copied().collect());
-    match lang { Lang::Ko => KO.get(zh).copied(), Lang::Zh | Lang::En => None }
+    type Table = LazyLock<HashMap<&'static str, &'static str>>;
+    static JA: Table = LazyLock::new(|| ja::STRINGS.iter().copied().collect());
+    static KO: Table = LazyLock::new(|| ko::STRINGS.iter().copied().collect());
+    static ES: Table = LazyLock::new(|| es::STRINGS.iter().copied().collect());
+    match lang { Lang::Ja => &JA, Lang::Ko => &KO, Lang::Es => &ES, Lang::Zh | Lang::En => return None }.get(zh).copied()
 }
 
 /// `text` was formatted from the Chinese `template`: read its values back
