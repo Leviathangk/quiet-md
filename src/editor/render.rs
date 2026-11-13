@@ -251,6 +251,7 @@ impl R<'_> {
             placeholder_dx: 0.,
             selection,
             caret: caret_here.then_some(sel.head.offset),
+            caret_row_end: caret_here && self.ed.caret_row_end == Some((id, sel.head.offset)),
             marked: self.ed.marked.as_ref().filter(|(b, _)| *b == id && !self.ghost).map(|(_, r)| r.clone()),
             cache: self.cache.clone(),
             show_caret: caret_here && self.focused && self.ed.caret_visible && !self.ed.read_only,
@@ -259,7 +260,24 @@ impl R<'_> {
             eq_counter: self.eqnos.get(&id).copied().unwrap_or(0),
             button_edit: if self.ghost { None } else { self.ed.button_preview(id) },
             scroll: None,
+            fit_content: false,
         }
+    }
+
+    /// The code column. Unwrapped code scrolls sideways in it, with the wide
+    /// table's thin scrollbar in the padding `below` the last line (#161).
+    fn code_column(&self, id: BlockId, wrap: bool, el: RichTextElement, below: f32) -> AnyElement {
+        if wrap {
+            return div().flex_1().min_w_0().overflow_hidden().child(el).into_any_element();
+        }
+        let (scroll, bar) = self.ed.code_hscroll.borrow_mut().entry(id).or_insert_with(|| (ScrollHandle::new(), Default::default())).clone();
+        div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .child(div().id(("code-scroll", id.0)).w_full().flex().overflow_x_scroll().track_scroll(&scroll).child(RichTextElement { fit_content: true, ..el }))
+            .child(super::scrollbar::table_scrollbar(scroll, bar).absolute().left_0().right_0().bottom(px(-below)).h(px(12.)))
+            .into_any_element()
     }
 
     fn caret_in_empty(&self, b: &Block) -> bool {
@@ -560,11 +578,17 @@ impl R<'_> {
                     MouseButton::Left,
                     cx.listener(move |e, _, window, cx| {
                         cx.stop_propagation();
+                        let selection = (e.core.sel, e.core.block_sel);
                         e.core.toggle_fold(id);
                         e.core.fix_selection();
                         e.keep_read_only_fold();
                         e.fold_anim = Some((id, std::time::Instant::now()));
-                        e.changed(window, cx);
+                        if selection == (e.core.sel, e.core.block_sel) {
+                            e.changed_preserving_viewport(window, cx);
+                        } else {
+                            // A caret hidden by the fold was moved to its heading.
+                            e.changed(window, cx);
+                        }
                     }),
                 )
                 .into_any_element(),
@@ -696,7 +720,7 @@ impl R<'_> {
                             cx.stop_propagation();
                             window.focus(&e.focus);
                             e.core.toggle_todo(id);
-                            e.changed(window, cx);
+                            e.changed_preserving_viewport(window, cx);
                         }),
                     )
                     .into_any_element()
@@ -962,7 +986,7 @@ impl R<'_> {
                                                 {
                                                     *wrap = !*wrap;
                                                 }
-                                                e.changed(window, cx);
+                                                e.changed_preserving_viewport(window, cx);
                                             }),
                                         ),
                                 )
@@ -1012,7 +1036,7 @@ impl R<'_> {
                                         .map(|(i, n)| div().h(px(code_line * *n as f32)).child(format!("{}", i + 1))),
                                 ),
                         ))
-                        .child(div().flex_1().min_w_0().overflow_hidden().child(el)),
+                        .child(self.code_column(id, wrap, el, 12.)),
                 )
             })
             .into_any_element()
@@ -1102,6 +1126,14 @@ impl Editor {
                     _ => ListOffset { item_ix: top.item_ix.min(pre + count - 1), offset_in_item: top.offset_in_item },
                 });
             }
+        }
+        // 阅读位置: the document reopens where it was left. Applied here, after
+        // the rows are known, because the item count is what `scroll_to` clamps
+        // against.
+        if let Some((ix, y)) = self.restore_top.take()
+            && ix < keys.len()
+        {
+            self.list.scroll_to(ListOffset { item_ix: ix, offset_in_item: px(y) });
         }
         self.items = items;
         self.item_keys = keys;
@@ -1249,7 +1281,14 @@ impl Editor {
         let Some((req, tries)) = self.reveal.take() else { return };
         let view = self.list.viewport_bounds();
         let caret_rect = |p: Pos| {
-            self.cache.borrow().get(&p.block).map(|l| Bounds::new(l.position_for(p.offset), size(px(2.), l.line_height)))
+            self.cache.borrow().get(&p.block).map(|l| {
+                let at = if self.caret_row_end == Some((p.block, p.offset)) {
+                    l.position_at_row_end(p.offset)
+                } else {
+                    l.position_for(p.offset)
+                };
+                Bounds::new(at, size(px(2.), l.line_height))
+            })
         };
         let (block, target) = match req {
             Reveal::Caret => match self.core.block_sel {
@@ -1290,6 +1329,19 @@ impl Editor {
             self.list.scroll_by(d);
             window.request_animation_frame();
         }
+        // Unwrapped code scrolls sideways to keep the caret (or find hit) in view.
+        if !matches!(req, Reveal::Block(_))
+            && let Some((scroll, _)) = self.code_hscroll.borrow().get(&block)
+        {
+            let (b, off, max) = (scroll.bounds(), scroll.offset(), scroll.max_offset().width);
+            let pad = px(16.);
+            let dx = if t.left() < b.left() + pad { b.left() + pad - t.left() } else if t.right() > b.right() - pad { b.right() - pad - t.right() } else { px(0.) };
+            let x = (off.x + dx).clamp(-max, px(0.));
+            if dx != px(0.) && x != off.x {
+                scroll.set_offset(point(x, off.y));
+                window.request_animation_frame();
+            }
+        }
     }
 
     fn render_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1321,6 +1373,7 @@ impl Editor {
         // Reads last frame's bar segments.
         self.table_autoscroll(window);
         self.block_autoscroll(window);
+        self.text_autoscroll(window, cx);
         self.tick_drop_flash(window);
         if let Some((_, t0)) = self.fold_anim {
             if t0.elapsed().as_secs_f32() >= 0.2 {
@@ -1635,7 +1688,7 @@ impl Editor {
                 .text_size(px(12.))
                 .line_height(px(22.))
                 .text_color(Theme::text_caption())
-                .child(if crate::settings::english() { format!("{n} {}", if n == 1 { "word" } else { "words" }) } else { format!("{n} 字") })
+                .child(crate::settings::localized(crate::settings::lang(), "{n} 字", || format!("{n} 字"), || format!("{n} {}", if n == 1 { "word" } else { "words" })))
                 .into_any_element(),
         )
     }
@@ -1943,7 +1996,7 @@ fn list_item_feishu(&self, b: &Block, siblings: &[Block], idx: usize, env: Env, 
                             cx.stop_propagation();
                             window.focus(&e.focus);
                             e.core.toggle_todo(id);
-                            e.changed(window, cx);
+                            e.changed_preserving_viewport(window, cx);
                         }),
                     )
                     .into_any_element()
@@ -2191,7 +2244,7 @@ fn code_block_feishu(&self, b: &Block, lang: &str, wrap: bool, cx: &mut Context<
                                                 {
                                                     *wrap = !*wrap;
                                                 }
-                                                e.changed(window, cx);
+                                                e.changed_preserving_viewport(window, cx);
                                             }),
                                         ),
                                 )
@@ -2239,7 +2292,7 @@ fn code_block_feishu(&self, b: &Block, lang: &str, wrap: bool, cx: &mut Context<
                                         .map(|(i, n)| div().h(px(22. * *n as f32)).child(format!("{}", i + 1))),
                                 ),
                         )
-                        .child(div().flex_1().min_w_0().overflow_hidden().child(el)),
+                        .child(self.code_column(id, wrap, el, 14.)),
                 )
             })
             .into_any_element()

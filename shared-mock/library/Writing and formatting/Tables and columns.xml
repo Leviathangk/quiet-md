@@ -25,4 +25,4 @@
 <h2>Adjust the widths</h2><p>Drag the gap between columns. Widths gently snap near equal splits and simple proportions.</p>
 <grid><column width-ratio="0.3"><p><b>Project</b></p><p><b>Timeline</b></p><p><b>Goal</b></p></column><column width-ratio="0.7"><p>Quiet.md</p><p>October–December 2026</p><p>A calm, reliable writing tool that keeps your notes in your hands</p></column></grid>
 <h2>Add or remove columns</h2><ul><li>Hover between columns and click the plus control to add one, up to ten columns.</li><li>Remove all content from a column to remove that column. When only one remains, the layout returns to ordinary blocks.</li></ul>
-<hr/><p>Next: <cite type="doc" doc-id="4ea21fc9-5061-5c03-a5a0-29465f895f0f" file-type="docx">Code and equations</cite>.</p>
+<hr/><p>Next: <cite type="doc" href="Code and equations.xml" file-type="docx">Code and equations</cite>.</p>

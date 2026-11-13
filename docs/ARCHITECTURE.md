@@ -11,8 +11,9 @@ Quiet.md 是一个单进程 GPUI 应用（Rust，约 4 万行）。一篇文档�
 
 ```
 main.rs ─ 窗口
+  ├─ onboarding.rs  首次启动的引导页；选定文档库后，同一个窗口换成 Workspace
   └─ app.rs  Workspace（窗口根视图）
-       ├─ store.rs        文档库：docs/*.xml + index.json（见 FORMAT.md）           [core]
+       ├─ store.rs        文档库：真实文件夹 + .quiet/index.json（见 FORMAT.md）           [core]
        ├─ sidebar / home / search / trash / tree / docmenu / docinfo / modes
        └─ editor::Editor（view.rs）   打开的那篇文档
             └─ editor::Core（core.rs） 文档 + 选区 + 撤销栈                        [core]
@@ -35,9 +36,10 @@ main.rs ─ 窗口
 
 1. 视图收到事件，调用 `core.checkpoint(kind)`。它记一个撤销快照，把 `generation` 加一，并置 `dirty`。连续输入（同一 block、相邻两次间隔不到 700ms）合成一步。
 2. 调用 Core 的操作方法修改 `core.doc` / `core.sel`。
-3. 调用 `Editor::changed()`：
-   - 先 `core.reveal_caret()`：如果选区（或块选区）两端被折叠藏起来了，就展开把它藏起来的标题或列表项；
-   - 有改动时发 `EditorEvent::Changed`，同时刷新查找结果、斜杠菜单和 @ 面板。
+3. 按滚动意图通知编辑器：
+   - 输入、导航等以光标为目标的操作调用 `Editor::changed()`，先 `core.reveal_caret()` 展开隐藏选区的标题或列表项，并请求滚动到光标；
+   - 点击任务框、调整列宽等独立目标操作调用 `changed_preserving_viewport()`，保留光标/选区和视口。折叠若把光标移到了标题，仍用 `changed()` 显示迁移后的光标；
+   - 两条路径有改动时都发 `EditorEvent::Changed`，同时刷新查找结果、斜杠菜单和 @ 面板。
 4. `Workspace` 收到 `Changed` 后调用 `schedule_save`，500ms 后 `flush()` 写盘。写盘失败时改动保持未保存，顶栏显示错误，切换文档、新建、退出前会询问。保存失败对话框支持重试、重新载入磁盘内容、另存恢复副本；重新载入同时重置编辑器及同文档窗口的状态。退出检查所有窗口，处理单个冲突后重新检查，仍有冲突时不会退出。系统退出阶段仍保存失败的正文存入本地应用数据目录的 `quiet-md/recovery/<文档库标识>/`，下次打开同一文档库时恢复为新文档，不覆盖磁盘原版。
 
 Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机编辑后检查：
@@ -142,7 +144,9 @@ Core 的不变量由 `crates/core/src/editor/fuzz_tests.rs` 在每一步随机�
 
 ## 界面语言
 
-界面支持简体中文与英文，偏好保存在 `Preferences::english`。静态文案使用 `settings::text` / `label` 的统一映射，成对文案使用 `settings::tr`，带参数的文案使用 `localized_format!`。菜单表保留稳定的原始标签，在显示时翻译；搜索同时匹配英文标签与原有关键词。输入框保留原始 placeholder，在渲染时翻译，切换语言时刷新所有窗口。
+界面支持简体中文、英文、日文、韩文与西班牙文（`settings::Lang`），偏好保存在 `Preferences::language`；旧文件没有这个字段时由 `Preferences::english` 决定，`english` 仍然写出，让旧版本把其他语言显示成英文。静态文案使用 `settings::text` / `label` 的统一映射，成对文案使用 `settings::tr`，带参数的文案使用 `localized_format!`。菜单表保留稳定的原始标签，在显示时翻译；搜索同时匹配英文标签与原有关键词。输入框保留原始 placeholder，在渲染时翻译，切换语言时刷新所有窗口。
+
+中文原文是翻译键：日文、韩文、西班牙文分别在 `src/l10n/ja.rs`、`ko.rs`、`es.rs` 里按中文查表，`tr`、`text` / `label` 和 `localized_format!` 都先查它，表里没有的显示英文，所以新增中文文案不需要同时写这些语言。`localized_format!` 的译文模板从格式化好的中文里读回参数再填入（`l10n::refill`），调用处不用改。不经过宏、要指定语言的地方（日期提醒的测试）用 `settings::localized`。`settings::english()` 的意思是“不是中文”。`python3 tools/l10n/keys.py --missing ja`（或 `ko`、`es`）列出该语言表还缺的键；`l10n` 的测试检查表里的键都还在源码中、模板占位符都来自中文原文。
 
 用户标题、正文、附件名和已保存的按钮文字不作为翻译键；只有空标题等界面默认值随语言变化。Core 的存储诊断在应用层用已知模板翻译，保留路径、文档 ID 和系统错误原文，文档引擎不依赖界面语言。语言回归检查覆盖界面翻译键、菜单表、日期提醒，以及用户内容和诊断参数的保留。
 
