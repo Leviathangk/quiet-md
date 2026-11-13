@@ -763,10 +763,32 @@ pub fn markdown_to_blocks_with_lines(text: &str, off: Off) -> (Vec<Block>, Vec<(
     (blocks, spans)
 }
 
-/// Inline rules only (pasting into a non-empty block): one block per line.
+/// Inline rules only (pasting into a non-empty block): one block per line,
+/// except a display equation, which becomes its own block.
 pub fn markdown_inline_lines(text: &str) -> Vec<Block> {
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
-    text.trim_end_matches('\n').split('\n').map(|l| Block::new(BlockKind::Text, md_inline(&tabs(l)))).collect()
+    let lines: Vec<&str> = text.trim_end_matches('\n').split('\n').collect();
+    let mut out = vec![];
+    let mut i = 0;
+    while i < lines.len() {
+        if let Some((b, n)) = display_math(&lines[i..]) {
+            if i == 0 {
+                out.push(Block::text(""));
+            }
+            out.push(b);
+            i += n;
+        } else {
+            out.push(Block::new(BlockKind::Text, md_inline(&tabs(lines[i]))));
+            i += 1;
+        }
+    }
+    out
+}
+
+pub fn has_display_math(text: &str) -> bool {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let lines: Vec<&str> = text.trim_end_matches('\n').split('\n').collect();
+    (0..lines.len()).any(|i| display_math(&lines[i..]).is_some())
 }
 
 /// Runs of tabs become one space.
@@ -869,6 +891,38 @@ fn fence(line: &str) -> Option<(char, usize, &str)> {
     (n >= 3).then(|| (c, n, t[n..].trim()))
 }
 
+fn display_math(lines: &[&str]) -> Option<(Block, usize)> {
+    let first = lines.first()?.trim();
+    if !first.starts_with("$$") {
+        return None;
+    }
+    let single = first.len() > 4 && first.ends_with("$$");
+    let (mut src, end) = if single {
+        (first[2..first.len() - 2].to_string(), 1)
+    } else {
+        let first = first[2..].to_string();
+        let end = lines.iter().skip(1).position(|l| {
+            let l = l.trim();
+            l == "$$" || (l.len() > 4 && l.ends_with("$$"))
+        })? + 1;
+        let mut parts = vec![first];
+        parts.extend(lines[1..end].iter().map(|l| tabs(l)));
+        let closing = lines[end - 1].trim();
+        let last = if closing == "$$" { String::new() } else { closing.strip_suffix("$$").unwrap_or(closing).to_string() };
+        *parts.last_mut().unwrap() = last;
+        (parts.join("\n"), end + 1)
+    };
+    src = src.trim().to_string();
+    if src.is_empty() {
+        return None;
+    }
+    let mut text = RichText::default();
+    text.push(crate::editor::core::EQUATION, Marks { inline: Some(crate::docxml::to_inline(InlineKind::Equation(src.to_string()))), ..Marks::default() });
+    let mut b = Block::new(BlockKind::Text, text);
+    b.align = Align::Center;
+    Some((b, end))
+}
+
 fn todo_prefix(s: &str) -> Option<(bool, &str)> {
     for (p, done) in [("[ ] ", false), ("[] ", false), ("【】 ", false), ("[x] ", true), ("[X] ", true), ("【x】 ", true)] {
         if let Some(r) = s.strip_prefix(p) {
@@ -901,6 +955,12 @@ fn md_blocks(lines: &[&str], off: Off, mut spans: Option<&mut Vec<(usize, usize)
         }
         let ind = indent_of(line);
         let body = line.trim();
+        if let Some((b, n)) = display_math(&lines[i..]) {
+            out.push(b);
+            i += n;
+            last_list = false;
+            continue;
+        }
         // Fenced code (closed or running to the end).
         if let Some((fc, n, info)) = fence(line).filter(|_| !off.code_divider) {
             let mut code = vec![];
@@ -1384,6 +1444,29 @@ mod tests {
         assert!(x.contains("<hr/>"), "{x}");
         assert!(x.contains("fn main() {}"), "{x}");
         assert!(x.contains("<table"), "{x}");
+    }
+
+    #[test]
+    fn markdown_display_math() {
+        for (src, equation) in [
+            ("$$V = I R$$", "V = I R"),
+            ("$$\nV &= I R \\\\\nQ_c &= 2I\n$$", "V &= I R \\\\\nQ_c &= 2I"),
+        ] {
+            let blocks = super::markdown_to_blocks(src, Default::default());
+            assert_eq!(blocks.len(), 1, "{src}: {blocks:?}");
+            assert_eq!(blocks[0].text.text, crate::editor::core::EQUATION);
+            let inline = blocks[0].text.spans().next().unwrap().1.inline.clone().unwrap();
+            assert_eq!(inline.equation().unwrap(), equation);
+        }
+    }
+
+    #[test]
+    fn detects_display_math() {
+        assert!(super::has_display_math("$$\nx\n$$"));
+        assert!(super::has_display_math("$$x$$"));
+        assert!(super::has_display_math("$$\n&=b\nQ\\_c$$"));
+        assert!(!super::has_display_math("$$\nx"));
+        assert!(!super::has_display_math("costs $$5"));
     }
 
     #[test]
