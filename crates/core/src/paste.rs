@@ -985,6 +985,8 @@ fn md_blocks(lines: &[&str], off: Off, mut spans: Option<&mut Vec<(usize, usize)
                 sub.push(r);
                 i += 1;
             }
+            // Not in a Markdown file edited as itself: saving would rewrite `[!NOTE]`.
+            if let Some(b) = (!off.alt).then(|| md_callout(&sub, off)).flatten() { out.push(b); continue; }
             let kids = md_blocks(&sub, Off { quote: true, ..off }, None);
             if !kids.is_empty() {
                 out.push(Block::new(BlockKind::Quote, RichText::default()).with_children(kids));
@@ -1022,6 +1024,43 @@ fn image_line(s: &str) -> Option<(&str, &str)> {
     let src = inner.split_once([' ', '\t']).map_or(inner, |(a, _)| a);
     let src = src.trim_start_matches('<').trim_end_matches('>');
     (!src.is_empty() && !inner.contains(')')).then_some((alt, src))
+}
+
+/// A quote that is really a callout: GitHub's / Obsidian's `[!NOTE] Title`
+/// first line (`+` / `-` folding ignored), or the `💡 text` our own Markdown
+/// export writes. Unknown `[!TYPE]`s still become a callout, with 💡.
+fn md_callout(lines: &[&str], off: Off) -> Option<Block> {
+    let first = lines.first()?.trim_start();
+    let (emoji, hue, title, rest) = if let Some(r) = first.strip_prefix("[!") {
+        let (ty, after) = r.split_once(']')?;
+        if ty.is_empty() || !ty.chars().all(|c| c.is_ascii_alphabetic() || c == '-') { return None; }
+        let (emoji, hue) = match ty.to_ascii_lowercase().as_str() {
+            "note" | "info" | "todo" => ("ℹ️", "blue"),
+            "abstract" | "summary" | "tldr" | "example" => ("📝", "purple"),
+            "tip" | "hint" => ("💡", "green"),
+            "success" | "check" | "done" => ("✅", "green"),
+            "important" => ("❗", "purple"),
+            "question" | "help" | "faq" => ("❓", "yellow"),
+            "warning" | "attention" => ("⚠️", "yellow"),
+            "caution" | "danger" | "error" | "failure" | "fail" | "missing" | "bug" => ("🚫", "red"),
+            "quote" | "cite" => ("💬", "gray"),
+            _ => ("💡", "orange"),
+        };
+        let title = after.trim_start_matches(['+', '-']).trim();
+        (emoji.to_string(), hue, (!title.is_empty()).then(|| title.to_string()), lines[1..].to_vec())
+    } else {
+        // Our export: `> 💡 body`, first line only. Colours aren't exported: a new callout's.
+        let (e, body) = first.split_once(' ')?;
+        if !crate::emoji::TSV.lines().any(|l| l.split('\t').nth(2) == Some(e)) { return None; }
+        let mut rest = lines.to_vec();
+        rest[0] = body;
+        (e.to_string(), "orange", None, rest)
+    };
+    let mut kids = md_blocks(&rest, Off { quote: true, ..off }, None);
+    if let Some(t) = title { kids.insert(0, Block::new(BlockKind::Text, md_inline(&format!("**{t}**")))); }
+    if kids.is_empty() { kids.push(Block::text("")); }
+    let kind = BlockKind::Callout { emoji, bg: Some(ColorName(format!("light-{hue}"))), border: Some(ColorName(hue.into())), text_color: None };
+    Some(Block::new(kind, RichText::default()).with_children(kids))
 }
 
 fn quote_line(s: &str) -> Option<&str> {
@@ -1385,6 +1424,24 @@ mod tests {
     fn whitespace_and_breaks() {
         let x = xml("<div>\n  line one <br>\n  line   two\n</div><p></p><div>x</div>");
         assert!(x.contains("<p>line one</p>\n<p>line two</p>\n<p></p>\n<p>x</p>"), "{x}");
+    }
+
+    #[test]
+    fn markdown_callouts() {
+        let md = |s: &str| docxml::serialize(&Document { blocks: super::markdown_to_blocks(s, Default::default()), ..Default::default() });
+        let x = md("> [!WARNING]\n> Pass a pointer.\n");
+        assert!(x.contains("<callout emoji=\"⚠️\" background-color=\"light-yellow\" border-color=\"yellow\">\n  <p>Pass a pointer.</p>\n</callout>"), "{x}");
+        let x = md("> [!tip]- Folded title\n> body\n");
+        assert!(x.contains("emoji=\"💡\"") && x.contains("<p><b>Folded title</b></p>\n  <p>body</p>"), "{x}");
+        // What our own export writes comes back a callout.
+        let x = md("> 🌰 nut\n");
+        assert!(x.contains("<callout emoji=\"🌰\"") && x.contains("<p>nut</p>"), "{x}");
+        // Plain quotes, and `[!x]` that is not a marker, stay quotes.
+        for q in ["> just a quote\n", "> [!] x\n", "> [!a b] x\n", "> :) hi\n"] { assert!(md(q).contains("<blockquote>"), "{q}: {}", md(q)); }
+        // A Markdown file edited as itself keeps its text.
+        let off = super::Off { file: true, alt: true, ..Default::default() };
+        let x = docxml::serialize(&Document { blocks: super::markdown_to_blocks("> [!NOTE]\n> x\n", off), ..Default::default() });
+        assert!(x.contains("<blockquote>"), "{x}");
     }
 
     #[test]

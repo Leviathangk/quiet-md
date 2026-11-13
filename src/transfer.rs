@@ -31,13 +31,13 @@ pub(crate) const IMPORT_FOLDER_LIMIT: usize = 2000;
 const IMPORT_FILE_LIMIT: u64 = 32 * 1024 * 1024;
 
 /// A folder to import: its documents and the sub-folders that hold some.
-pub(crate) struct Scanned { name: String, dirs: Vec<Scanned>, docs: Vec<PathBuf>, pub(crate) files: usize }
+pub(crate) struct Scanned { name: String, dir: PathBuf, dirs: Vec<Scanned>, docs: Vec<PathBuf>, pub(crate) files: usize }
 
 /// Markdown and DocxXML files under `dir`, by name; hidden folders,
 /// dependency folders and symlinks are skipped.
 pub(crate) fn scan_folder(dir: &Path, depth: usize) -> Option<Scanned> {
     let name = dir.file_name()?.to_string_lossy().into_owned();
-    let mut t = Scanned { name, dirs: vec![], docs: vec![], files: 0 };
+    let mut t = Scanned { name, dir: dir.to_path_buf(), dirs: vec![], docs: vec![], files: 0 };
     if depth > 32 { return Some(t); }
     let mut items: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().collect();
     items.sort_by_key(|e| e.file_name().to_string_lossy().to_lowercase());
@@ -58,13 +58,15 @@ pub(crate) fn scan_folder(dir: &Path, depth: usize) -> Option<Scanned> {
     Some(t)
 }
 
-/// A Markdown file as a new Markdown document inside `parent`.
-pub(crate) fn import_markdown(store: &mut crate::store::Store, path: &Path, parent: Option<&str>) -> anyhow::Result<String> {
+/// A Markdown file as a new Markdown document inside `parent`; `root`: the
+/// folder being imported, where `![[picture.png]]` embeds are also looked up.
+pub(crate) fn import_markdown(store: &mut crate::store::Store, path: &Path, root: Option<&Path>, parent: Option<&str>) -> anyhow::Result<String> {
     let bytes = crate::store::read_bounded(path, IMPORT_FILE_LIMIT)?;
     let text = String::from_utf8_lossy(&bytes);
     let text = text.trim_start_matches('\u{feff}');
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().trim().to_string();
     let mut doc = crate::markdown::parse_file(text, &stem, path.parent());
+    if let Some(dir) = path.parent() { crate::markdown::wiki_images(&mut doc.blocks, dir, root); }
     crate::editor::image::localize_pasted_images(&mut doc.blocks);
     if doc.blocks.is_empty() { doc.blocks.push(Block::text("")); }
     store.create_markdown_in(&doc, crate::markdown::front_matter(text).0, parent)
@@ -73,13 +75,17 @@ pub(crate) fn import_markdown(store: &mut crate::store::Store, path: &Path, pare
 /// One scanned folder as a library folder under `parent`; its id. Needs no
 /// window, so 欢迎页 can import on a background thread before the main window.
 pub(crate) fn import_tree(store: &mut crate::store::Store, t: &Scanned, parent: Option<&str>, failed: &mut usize) -> Option<String> {
+    tree(store, t, &t.dir, parent, failed)
+}
+
+fn tree(store: &mut crate::store::Store, t: &Scanned, root: &Path, parent: Option<&str>, failed: &mut usize) -> Option<String> {
     let id = match store.create_folder(&t.name, parent) {
         Ok(id) => id,
         Err(_) => { *failed += t.files; return None; }
     };
-    for sub in &t.dirs { import_tree(store, sub, Some(&id), failed); }
+    for sub in &t.dirs { tree(store, sub, root, Some(&id), failed); }
     for p in &t.docs {
-        let made = if crate::local_files::is_markdown_path(p) { import_markdown(store, p, Some(&id)) } else { store.import_into(p, Some(&id)) };
+        let made = if crate::local_files::is_markdown_path(p) { import_markdown(store, p, Some(root), Some(&id)) } else { store.import_into(p, Some(&id)) };
         if made.is_err() { *failed += 1; }
     }
     Some(id)
@@ -208,6 +214,7 @@ pub fn markdown_document(path: &Path) -> std::io::Result<Document> {
     }
     if let Some(dir) = path.parent() {
         resolve_images(&mut blocks, dir);
+        crate::markdown::wiki_images(&mut blocks, dir, None);
     }
     crate::editor::image::localize_pasted_images(&mut blocks);
     if blocks.is_empty() {
@@ -448,7 +455,7 @@ impl Workspace {
     /// A Markdown file copied into the library, still Markdown: its local
     /// images are copied into the library's assets.
     fn import_markdown(&mut self, path: &Path, parent: Option<&str>) -> anyhow::Result<String> {
-        self.store.with(|s| import_markdown(s, path, parent))
+        self.store.with(|s| import_markdown(s, path, None, parent))
     }
 
     /// 导入文件夹: pick a folder; it lands at the top of 我的文档 as a folder,

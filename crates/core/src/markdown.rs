@@ -302,6 +302,90 @@ pub fn resolve_images(blocks: &mut [Block], base: &Path) {
     }
 }
 
+/// The picture formats the editor shows (`src/editor/image.rs`).
+const PICTURES: [&str; 6] = ["jpeg", "jpg", "png", "gif", "webp", "bmp"];
+
+/// On import: a paragraph that is just `![[name.png]]` (or `![[name.png|300]]`)
+/// — how Obsidian and its exports embed a picture — as that picture. Looked up
+/// the way Obsidian does: beside the page, in the vault's attachment folder,
+/// at the vault's top, then anywhere in the vault by a name only one file has.
+/// The vault is the nearest folder above the page holding `.obsidian`, else
+/// `root` (the folder being imported). What can't be found or shown
+/// (`![[page#heading]]`, a missing file, an svg) stays the text it was.
+pub fn wiki_images(blocks: &mut [Block], page_dir: &Path, root: Option<&Path>) {
+    let vault = page_dir.ancestors().find(|d| d.join(".obsidian").is_dir()).or(root);
+    let attachments = vault.and_then(|v| {
+        let app: serde_json::Value = serde_json::from_slice(&std::fs::read(v.join(".obsidian/app.json")).ok()?).ok()?;
+        let f = app.get("attachmentFolderPath")?.as_str()?.trim_end_matches('/');
+        Some(match f.strip_prefix("./") { Some(r) => page_dir.join(r), None if f == "." => page_dir.to_path_buf(), None => v.join(f.trim_start_matches('/')) })
+    });
+    let mut by_name: Option<std::sync::Arc<Names>> = None;
+    wiki_walk(blocks, &mut |name| {
+        let p = Path::new(name);
+        let found = [Some(page_dir), attachments.as_deref(), vault].into_iter().flatten().map(|d| d.join(p)).find(|p| p.is_file());
+        found.or_else(|| {
+            let v = vault?;
+            let names = by_name.get_or_insert_with(|| vault_names(v));
+            let names: &Names = names;
+            match names.get(&p.file_name()?.to_string_lossy().to_lowercase())?.as_slice() { [one] => Some(one.clone()), _ => None }
+        })
+    });
+}
+
+fn wiki_walk(blocks: &mut [Block], find: &mut dyn FnMut(&str) -> Option<PathBuf>) {
+    for b in blocks.iter_mut() {
+        wiki_walk(&mut b.children, find);
+        if let BlockKind::Table(t) = &mut b.kind {
+            for cell in t.rows.iter_mut().flatten() { wiki_walk(&mut cell.blocks, find); }
+        }
+        if !matches!(b.kind, BlockKind::Text) { continue; }
+        let Some(inner) = b.text.text.trim().strip_prefix("![[").and_then(|r| r.strip_suffix("]]")) else { continue };
+        let (name, size) = inner.split_once('|').map_or((inner, None), |(n, s)| (n, Some(s)));
+        // `![[page#heading]]` embeds part of a page, not a file.
+        let name = name.trim();
+        if name.is_empty() || name.contains(['#', '^']) || name.contains("]]") { continue; }
+        let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+        if !PICTURES.contains(&ext.as_str()) { continue; }
+        let Some(path) = find(name) else { continue };
+        // `|300` or `|300x200`: the width.
+        let width = size.and_then(|s| s.trim().split('x').next()?.trim().parse::<f32>().ok()).filter(|w| *w > 0.);
+        b.kind = BlockKind::Image { src_kind: "src".into(), src: path.to_string_lossy().into_owned(), width, height: None, caption: None, crop: None };
+        b.text = RichText::default();
+    }
+}
+
+type Names = std::collections::HashMap<String, Vec<PathBuf>>;
+
+/// Every file in `vault` by lower-case name (folders starting with `.` skipped;
+/// at most 50 000 entries). Kept a minute: a folder import asks once per page.
+fn vault_names(vault: &Path) -> std::sync::Arc<Names> {
+    static LAST: std::sync::Mutex<Option<(PathBuf, std::time::Instant, std::sync::Arc<Names>)>> = std::sync::Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((v, t, n)) = &*last && v == vault && t.elapsed().as_secs() < 60 { return n.clone(); }
+    let n = std::sync::Arc::new(walk_names(vault));
+    *last = Some((vault.to_path_buf(), std::time::Instant::now(), n.clone()));
+    n
+}
+
+fn walk_names(vault: &Path) -> Names {
+    let (mut out, mut stack, mut seen) = (Names::new(), vec![vault.to_path_buf()], 0);
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            seen += 1;
+            if seen > 50_000 { return out; }
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') { continue; }
+            match e.file_type() {
+                Ok(t) if t.is_dir() => stack.push(e.path()),
+                Ok(t) if t.is_file() => out.entry(name.to_lowercase()).or_default().push(e.path()),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// A Markdown file as a page: `title` is its name (a Markdown file has no
 /// title of its own), the body every line after the front matter. `base`:
 /// the folder of a file outside the library, which relative images resolve
@@ -773,5 +857,32 @@ mod tests {
         let src = "| a | b | c |\n| :--- | :---: | ---: |\n| 1 | 2 | 3 |";
         let doc = parse_file(src, "t", None);
         assert_eq!(write_file(&doc, "", None).trim_end(), "| a | b | c |\n| --- | :---: | ---: |\n| 1 | 2 | 3 |");
+    }
+
+    /// `![[a.png]]`, as Obsidian and its exports write it: beside the page,
+    /// in the vault's attachment folder, or by a name only one file has.
+    #[test]
+    fn wiki_embeds_become_pictures_when_the_file_is_there() {
+        let root = std::env::temp_dir().join(format!("fdl-embed-{}", uuid::Uuid::new_v4()));
+        let notes = root.join("notes");
+        for d in ["notes", ".obsidian", "files", "deep/er"] { std::fs::create_dir_all(root.join(d)).unwrap(); }
+        std::fs::write(root.join(".obsidian/app.json"), r#"{"attachmentFolderPath":"files"}"#).unwrap();
+        for f in ["notes/p 1.png", "files/att.png", "deep/er/far.png", "drawing.svg", "notes/twice.png", "files/twice.png"] { std::fs::write(root.join(f), b"png").unwrap(); }
+        let src = "4、\n\n![[p 1.png]]\n\n![[p 1.png|300x200]]\n\n![[att.png]]\n\n![[far.png]]\n\n![[missing.png]]\n\n![[page#heading]]\n\n![[drawing.svg]]\n\n![[deep/er/far.png]]\n";
+        let mut doc = parse_file(src, "page", Some(&notes));
+        wiki_images(&mut doc.blocks, &notes, None);
+        let pics: Vec<(PathBuf, Option<f32>)> = doc.blocks.iter().filter_map(|b| match &b.kind {
+            BlockKind::Image { src, width, .. } => Some((PathBuf::from(src), *width)),
+            _ => None,
+        }).collect();
+        let p1 = notes.join("p 1.png");
+        assert_eq!(pics, vec![(p1.clone(), None), (p1, Some(300.)), (root.join("files/att.png"), None), (root.join("deep/er/far.png"), None), (root.join("deep/er/far.png"), None)]);
+        let texts: Vec<&str> = doc.blocks.iter().map(|b| b.text.text.as_str()).filter(|t| !t.is_empty()).collect();
+        assert_eq!(texts, vec!["4、", "![[missing.png]]", "![[page#heading]]", "![[drawing.svg]]"]);
+        // Imported as a DocxXML page (not edited as Markdown) too.
+        let mut blocks = crate::paste::markdown_to_blocks("![[att.png]]\n", crate::paste::Off { file: true, ..Default::default() });
+        wiki_images(&mut blocks, &notes, None);
+        assert!(matches!(&blocks[0].kind, BlockKind::Image { src, .. } if Path::new(src) == root.join("files/att.png")), "{blocks:?}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
