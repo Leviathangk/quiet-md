@@ -232,6 +232,10 @@ pub struct Workspace {
     /// 通用's language dropdown while open: the highlighted language.
     pub lang_menu: Option<crate::settings::Lang>,
     pub lang_anchor: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
+    /// 通用's other dropdowns (快捷新建, 网页搜索, 打开链接): the open one, and
+    /// where each button was drawn last frame.
+    pub pref_menu: Option<crate::settings::PrefMenu>,
+    pub pref_anchors: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<&'static str, Bounds<Pixels>>>>,
     /// 快捷键's filter field.
     pub settings_filter: Entity<TextField>,
     native_sidebar: crate::native_header::NativeSidebar,
@@ -446,6 +450,8 @@ impl Workspace {
             theme_anchor: Default::default(),
             lang_menu: None,
             lang_anchor: Default::default(),
+            pref_menu: None,
+            pref_anchors: Default::default(),
             settings_filter,
             store,
             entries,
@@ -798,6 +804,7 @@ impl Workspace {
         self.trash_menu = None;
         self.theme_menu = None;
         self.lang_menu = None;
+        self.pref_menu = None;
         self.home.sort_menu = false;
         cx.notify();
     }
@@ -1393,6 +1400,7 @@ impl Render for Workspace {
         let home_menus = self.render_home_menus(cx);
         let theme_menu = self.render_theme_menu(cx);
         let lang_menu = self.render_lang_menu(cx);
+        let pref_menu = self.render_pref_menu(cx);
         let toast = self.render_toast(window);
         let mode_menu = self.render_mode_menu(cx);
         let main = match self.view {
@@ -1494,7 +1502,8 @@ impl Render for Workspace {
             }))
             .on_key_down(cx.listener(|w, ev: &KeyDownEvent, window, cx| {
                 // The theme dropdown: ↑ ↓ preview, ↩ applies, Esc closes it (not 设置).
-                if (w.theme_menu.is_some() && w.theme_menu_key(&ev.keystroke.key, cx)) || (w.lang_menu.is_some() && w.lang_menu_key(&ev.keystroke.key, cx)) {
+                if (w.theme_menu.is_some() && w.theme_menu_key(&ev.keystroke.key, cx)) || (w.lang_menu.is_some() && w.lang_menu_key(&ev.keystroke.key, cx))
+                    || (w.pref_menu.is_some() && w.pref_menu_key(&ev.keystroke.key, cx)) {
                     cx.stop_propagation();
                     return;
                 }
@@ -1559,6 +1568,7 @@ impl Render for Workspace {
             .children(home_menus)
             .children(theme_menu)
             .children(lang_menu)
+            .children(pref_menu)
             .children(confirm)
             .children(move_dlg)
             .children(export_md)
