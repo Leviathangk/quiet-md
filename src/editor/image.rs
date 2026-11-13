@@ -228,6 +228,18 @@ pub fn frame_drawn(window: &mut Window, cx: &mut App) {
     }
 }
 
+/// devtools: take every hollow picture out of this window's atlas and draw a
+/// frame, as a rebuilt atlas (Windows device loss) would. Returns how many.
+#[cfg(feature = "devtools")]
+pub fn forget_uploads(window: &mut Window, cx: &mut App) -> usize {
+    let Some(e) = PICTURES.with(|p| p.get().cloned()) else { return 0 };
+    let map = e.read(cx).0.clone();
+    let ims: Vec<_> = map.borrow().values().filter_map(|s| match &s.image { Some(Ok(im)) if im.is_hollow() => Some(im.clone()), _ => None }).collect();
+    for im in &ims { let _ = window.drop_image(im.clone()); }
+    window.refresh();
+    ims.len()
+}
+
 /// Device pixels to decode for a long edge of `px`: rounded up to a step, so
 /// resizing an image re-decodes it now and then, not every frame. 0 is the
 /// file's own size.

@@ -3176,6 +3176,8 @@ impl Window {
                 Ok(data.as_bytes(frame_index).map(|bytes| (data.size(frame_index), Cow::Borrowed(bytes))))
             })?
         else {
+            // Ask for one more frame: the owner decodes it again when it next renders.
+            if self.missing_images.is_empty() { self.on_next_frame(|window, _| window.refresh()); }
             self.missing_images.push(data.id);
             return Ok(());
         };
