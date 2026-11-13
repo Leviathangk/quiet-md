@@ -41,6 +41,7 @@ diff -ru $R/taffy-0.9.0/src vendor/taffy/src
 | 20 | `elements/img.rs`、`elements/image_cache.rs` | 图片缓存增加不触发加载的 `peek`；显式尺寸图片可选择延迟到可见区域绘制时才解码 | 卡片裁剪范围之外的图片不再预先解码；原始像素、尺寸和动图播放保持不变 |
 | 21 | `platform/mac/metal_atlas.rs` | 删除图片时立即移除 tile 索引，再递减所属纹理的引用计数 | 避免共享纹理仍被使用时残留旧索引，导致重复删除或复用失效 tile |
 | 22 | `platform/mac/platform.rs` | 读取剪贴板时同时保留文字和一种图片格式（优先 PNG），跳过空图片数据 | 截图工具同时提供文字和图片时，正文可选择图片，文本输入框仍可读取文字 |
+| 23 | `text_system/line_wrapper.rs` | `is_word_char` 把韩文（谚文字母、兼容字母、音节及半角谚文）算作单词字符；上游测试原本断言它不是 | 韩文用空格分词，界面文字按词（어절）换行，不再在词中间断开；超出一行的长词仍按字符断开 |
 
 
 ## taffy 0.9.0
