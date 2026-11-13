@@ -1092,7 +1092,7 @@ fn pipe_table(lines: &[&str]) -> Option<(Block, usize)> {
         rows.push(table_cells(l));
         n += 1;
     }
-    let rows = rows
+    let rows: Vec<Vec<TableCell>> = rows
         .into_iter()
         .map(|r| {
             (0..ncols)
@@ -1104,9 +1104,36 @@ fn pipe_table(lines: &[&str]) -> Option<(Block, usize)> {
                 .collect()
         })
         .collect();
-    let mut t = Table { col_widths: vec![200.; ncols], header_rows: 1, header_col: false, rows };
+    let col_widths = pipe_table_widths(&rows, ncols);
+    let mut t = Table { col_widths, header_rows: 1, header_col: false, rows };
     t.repair();
     Some((Block::new(BlockKind::Table(t), RichText::default()), n))
+}
+
+/// Initial Markdown widths; saved DocxXML widths and manual resizing stay intact.
+fn pipe_table_widths(rows: &[Vec<TableCell>], ncols: usize) -> Vec<f32> {
+    use unicode_width::UnicodeWidthStr;
+    let mut widths = vec![Table::MIN_WIDTH; ncols];
+    for row in rows {
+        for (c, cell) in row.iter().enumerate() {
+            for b in &cell.blocks {
+                let text = b.text.plain_text();
+                let units = text.lines().map(UnicodeWidthStr::width).max().unwrap_or(0);
+                // Approximate body text plus cell padding; prose wraps at 480px.
+                widths[c] = widths[c].max((units as f32 * 8. + 24.).clamp(Table::MIN_WIDTH, 480.));
+            }
+        }
+    }
+    // Fit an ordinary text column when possible. Wide tables still scroll,
+    // with at least the default width per column available on average.
+    let total: f32 = widths.iter().sum();
+    let budget = 720f32.max(ncols as f32 * Table::DEFAULT_WIDTH);
+    if total > budget {
+        let min = ncols as f32 * Table::MIN_WIDTH;
+        let scale = (budget - min) / (total - min);
+        widths.iter_mut().for_each(|w| *w = (Table::MIN_WIDTH + (*w - Table::MIN_WIDTH) * scale).floor());
+    }
+    widths
 }
 
 fn is_boundary(c: Option<char>) -> bool {
@@ -1390,6 +1417,59 @@ mod tests {
     fn markdown_literals() {
         let t = super::md_inline("a_b_c snake_case_name ** x** costs $5 and $6");
         assert!(t.runs.iter().all(|r| !r.marks.bold && !r.marks.italic), "{:?}", t);
+    }
+
+    fn markdown_table(text: &str) -> crate::model::Table {
+        let mut blocks = super::markdown_to_blocks(text, super::Off::default());
+        let crate::model::BlockKind::Table(t) = blocks.remove(0).kind else { panic!("expected table") };
+        t
+    }
+
+    #[test]
+    fn markdown_table_widths_follow_content() {
+        let t = markdown_table("| ID | Status | Description |\n| --: | :--: | --- |\n| 1 | OK | A longer description should get more room than a short identifier or status. |\n| 2 | Done | Short |\n");
+        assert!(t.col_widths[0] < t.col_widths[1], "{:?}", t.col_widths);
+        assert!(t.col_widths[1] < 200. && t.col_widths[2] > 200., "{:?}", t.col_widths);
+        assert!(t.col_widths.iter().sum::<f32>() <= 720.);
+        assert_eq!(t.header_rows, 1);
+        assert_eq!(t.rows[1][0].blocks[0].align, crate::model::Align::Right);
+        assert_eq!(t.rows[1][1].blocks[0].align, crate::model::Align::Center);
+        assert_eq!(t.rows[1][2].blocks[0].text.text, "A longer description should get more room than a short identifier or status.");
+        let doc = Document { blocks: vec![crate::model::Block::new(crate::model::BlockKind::Table(t), RichText::default())], ..Default::default() };
+        let saved = docxml::serialize(&doc);
+        assert_eq!(docxml::serialize(&docxml::parse(&saved).unwrap()), saved);
+    }
+
+    #[test]
+    fn markdown_table_widths_use_visible_unicode_text() {
+        let t = markdown_table("| aaaaaa | 中文内容测试 |\n| --- | --- |\n| aaaaaa | 中文内容测试 |\n");
+        assert!(t.col_widths[1] > t.col_widths[0], "{:?}", t.col_widths);
+        let plain = markdown_table("| Label | Label |\n| --- | --- |\n| Resume | Resume |\n");
+        let styled = markdown_table(&format!("| Label | Label |\n| --- | --- |\n| **Resume** | [Resume](https://example.com/{}) |\n", "long-path/".repeat(100)));
+        assert_eq!(styled.col_widths, plain.col_widths);
+        let accents = markdown_table("| éééééé | e\u{301}e\u{301}e\u{301}e\u{301}e\u{301}e\u{301} |\n| --- | --- |\n");
+        assert_eq!(accents.col_widths[0], accents.col_widths[1]);
+        let emoji = markdown_table("| 😀😀😀😀 | 👨‍👩‍👧‍👦👨‍👩‍👧‍👦👨‍👩‍👧‍👦👨‍👩‍👧‍👦 |\n| --- | --- |\n");
+        assert_eq!(emoji.col_widths[0], emoji.col_widths[1]);
+    }
+
+    #[test]
+    fn markdown_table_widths_are_bounded() {
+        use crate::model::Table;
+        let empty = markdown_table("| | |\n| --- | --- |\n| |\n");
+        assert_eq!(empty.col_widths, vec![Table::MIN_WIDTH; 2]);
+        assert_eq!(empty.rows[1].len(), 2);
+        let long = "description ".repeat(1000);
+        let t = markdown_table(&format!("| x |\n| --- |\n| {long} |\n"));
+        assert!(t.col_widths[0] > 200. && t.col_widths[0] <= 480.);
+        for n in [3, 20] {
+            let head = vec!["x"; n].join("|");
+            let sep = vec!["---"; n].join("|");
+            let body = vec![long.as_str(); n].join("|");
+            let t = markdown_table(&format!("|{head}|\n|{sep}|\n|{body}|\n"));
+            assert!(t.col_widths.iter().all(|w| w.is_finite() && *w >= Table::MIN_WIDTH && *w <= 480.));
+            assert!(t.col_widths.iter().sum::<f32>() <= 720f32.max(n as f32 * Table::DEFAULT_WIDTH));
+        }
     }
 
     #[test]
