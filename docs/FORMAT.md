@@ -1,32 +1,46 @@
 # 存储格式
 
-## 文档库目录
+## 文档库目录（FORMAT 4）
 
-默认位置：`~/Documents/Quiet.md`（「文稿」里的独立文件夹，用户能直接看到和备份）。可以用环境变量 `QUIET_MD_HOME` 指定别处。
+默认位置：`~/Documents/Quiet.md`（「文稿」里的独立文件夹，用户能直接看到和备份）。首次启动可以改到别处，选定的位置记在本机应用数据目录的 `quiet-md/library.json`（`store::Location`，只有 `path` 一个字段；以后加字段一律 `#[serde(default)]`）。环境变量 `QUIET_MD_HOME` 可以临时指定别处，测试一律用它。
+
+磁盘就是侧栏：文件夹是真实目录，每篇文档一个文件，以标题命名（转义规则见 `layout::file_name_for`，同名加 ` 2`）。设计见 `docs/design/real-folders.md`。
 
 ```
 Quiet.md/
-├── format.json          {"format": 2}：目录布局版本（store::FORMAT）
-├── index.json           文档 id → Meta
-├── index.json.bak       上一版 index.json
-├── settings.json        窗口级 UI 设置（侧栏宽度等）
-├── .lock                写锁（flock）：改写索引时短暂独占，不是单实例标记
-├── docs/<id>.xml        每篇文档一份 DocxXML
-├── assets/              粘贴或插入的图片、附件；assets/thumbs 是文件预览缩略图
-└── trash/
-    ├── index.json       id → Trashed { meta, deleted, root }
-    └── <id>.xml
+├── 工作/                文件夹
+│   ├── 周报.xml          DocxXML 文档
+│   └── 方案.md           Markdown 文档
+├── 随手记.xml
+├── .assets/             粘贴或插入的图片、附件；.assets/thumbs 是文件预览缩略图
+└── .quiet/              应用自己的数据
+    ├── format.json      {"format": 4}：目录布局版本（store::FORMAT）
+    ├── index.json       相对路径 → 附加信息（见下）
+    ├── index.json.bak   上一版 index.json
+    ├── settings.json    窗口级 UI 设置（侧栏宽度等）
+    ├── preferences.json、shortcuts.json、emoji.json、themes/
+    ├── .lock            写锁（flock）：改写索引时短暂独占，不是单实例标记
+    ├── trash/           回收站：index.json（id → Trashed）和被删的文件
+    └── before-folders-4/  迁移前的旧布局备份，30 天后清理
 ```
 
-### Meta 字段
+扫描时递归遍历文档库，认 `.md` 和 `.xml`，跳过以 `.` 开头的目录和文件（`.quiet`、`.assets`、`.git`、`.obsidian` 等）。在访达里手放的文件也会出现。窗口尺寸只属于这台电脑，存在本机应用数据目录，不进文档库。
+
+### 链接与图片
+
+- 文档链接写成相对于当前文件的路径：DocxXML 是 `<cite type="doc" href="../工作/周报.xml">`，Markdown 是标准链接。读入时解析成运行期 id，写出时再换回路径，整个文件夹拷走后链接仍然有效。读旧文件时仍认 `doc-id`。
+- 图片和附件的 `path` 相对于文档库根目录（`.assets/…`）。
+
+### 索引（.quiet/index.json）
+
+键是相对路径，文件夹以 `/` 结尾（`"工作/"`）。值是 `Attached`：
 
 | 字段 | 含义 | 省略时 |
 |---|---|---|
-| `created` / `modified` / `opened` | unix 秒 | 必填；`opened` 默认 0 |
+| `id` | 运行期 id，编辑器、窗口、撤销用；不是链接的依据 | 必填 |
+| `created` / `modified` | unix 秒 | 必填 |
 | `pinned` | 置顶 | false |
 | `starred` | 收藏时间，0 表示未收藏 | 0 |
-| `folder` | 文件夹名称；文件夹只存索引，不对应 XML | 普通文档 |
-| `parent` | 父文件夹 id | 顶层 |
 | `order` | 文件夹内的同级顺序 | 0，未手动排序 |
 | `root_order` | 顶层同级顺序 | 未手动排序 |
 | `width` | 页宽：`standard`（820）/ `wide`（1020）/ `full` | standard |
@@ -35,15 +49,20 @@ Quiet.md/
 | `info` | 文档信息行：`{hidden, created, modified}` | 只显示修改时间 |
 | `refs_hidden` | 隐藏引用列表 | false |
 
-新字段一律带 `#[serde(default)]`，值为默认时不写出。这样旧版程序读新库会忽略它不认识的字段，新版程序读旧库会用默认值。
+文件夹归属、名字、是否 Markdown 都由路径决定，不进索引。删掉 `.quiet/index.json` 不丢正文、结构和链接，只丢置顶、收藏、手动排序这些附加信息。新字段一律带 `#[serde(default)]`，值为默认时不写出。
 
-### 文件夹迁移与排序
+### 从旧布局迁移（FORMAT 3 → 4）
 
-FORMAT 2 把旧的父文档结构转换为同名文件夹，原父文档保留为文件夹内第一篇文档，其余子项保持旧顺序。迁移前保留 `index.before-folders.json`。文件夹的删除与恢复使用回收站索引，不创建虚假的 XML 文件。
+旧布局是平铺的 `docs/<id>.xml`，文件夹只是 `index.json` 里的记录。`Store::open` 遇到旧库时：
 
-侧栏和主页手动排序共用 `Meta::place()`：未手动定位的条目按修改时间倒序在前，已定位的条目按顺序号排列，最后用 id 打破并列。首次初始化手动排序会固定现有顺序。
+- **静默迁移**：本机文档库直接迁移，完成后更新日志卡片里说明迁了多少篇。
+- **先征求同意**：文档库在同步盘里（iCloud、Dropbox 等），或者有在别的电脑上用过的迹象（本机文件路径不存在、同步冲突副本），或者用户之前恢复过旧布局时，`Store::migration_state` 返回 `NeedsConsent`，界面弹窗询问；「稍后」一周后再问。
+- 迁移前把旧布局整份移进 `.quiet/before-folders-4/`；任何一步失败都回滚，不留半迁移的库。`Store::restore_backup` 能退回旧布局。
+- 更早的 FORMAT 2 把父文档结构转换成同名文件夹，迁移前保留 `index.before-folders.json`。
 
-新版可迁移旧库，不保证旧程序能安全写入新库。早期版本只对高版本标记给出警告，升级后的库不应交给这些旧版本写入。FORMAT 3 的直接 Markdown 文件支持不属于本分支。
+侧栏和主页手动排序共用 `Meta::place()`：未手动定位的条目按修改时间倒序在前，已定位的条目按顺序号排列，最后用 id 打破并列。
+
+旧版本遇到 FORMAT 4 会拒绝打开，不会误读。
 
 ### 可靠性约定
 
@@ -51,9 +70,9 @@ FORMAT 2 把旧的父文档结构转换为同名文件夹，原父文档保留�
 - **索引损坏后恢复。** 每次保存 `index.json` 前，先把旧文件复制成 `.bak`。读取时如果解析失败：
   - 坏文件改名为 `<name>.corrupt-<秒>` 保留，不会被覆盖；
   - 改用 `.bak`，并提示用户一次；
-  - 没有可用的 `.bak` 时，用空索引。文档本身还在 `docs/` 里，只是置顶、层级这些信息会丢。
+  - 没有可用的 `.bak` 时，用空索引。文档和文件夹都还在磁盘上，只是置顶、收藏、排序这些信息会丢。
 - **版本标记。** 打开库时，如果 `format.json` 里的版本比本程序新，会拒绝打开并提示升级；每次写入获取锁后也会重新检查版本。改目录布局、会让旧版本误读的时候，要把 `FORMAT` 加一。
-- **手放的文件也会出现。** 直接放进 `docs/` 的 `.xml` 文件（比如从飞书导出的 DocxXML）会出现在列表里。
+- **手放的文件也会出现。** 在访达里放进文档库的 `.xml`（比如从飞书导出的 DocxXML）和 `.md` 文件会出现在列表里。
 - **保存失败不静默。**
 
 ## DocxXML
