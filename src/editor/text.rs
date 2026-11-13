@@ -381,7 +381,9 @@ fn doc_geom(ix: usize, l: &crate::model::InlineDocLink, spec: &TextSpec, row_w: 
         window.text_system().shape_line(e.into(), px(fs), &[run], None)
     });
     let s = fs.round();
-    let text_x = 2. + s + 2.;
+    // An emoji can be wider than the em box (Segoe UI Emoji on Windows): keep the title clear of it.
+    let iw = emoji.as_ref().map_or(s, |e| f32::from(e.width).max(s));
+    let text_x = 2. + iw + 2.;
     let w = (text_x + f32::from(line.width) + 2.).min(row_w.max(text_x + 2.));
     EqGeom {
         ix,
