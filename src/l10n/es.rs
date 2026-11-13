@@ -637,7 +637,7 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("未设置", "Sin asignar"),
     ("应用快捷键最多四组，全局快捷键只支持一组", "Los atajos de la app admiten hasta cuatro combinaciones; los globales, solo una"),
     ("与全局快速新建快捷键冲突，请先修改全局快捷键", "Coincide con el atajo global de nota rápida; cámbialo primero"),
-    ("⌘ ⌥ Space 用于全局打开上次的文档，请选择其他组合", "⌘ ⌥ Espacio está reservado para abrir el último documento; elige otra combinación"),
+    ("与全局打开上次文档的快捷键冲突，请先修改那一项", "Coincide con el atajo global para abrir el último documento; cámbialo primero"),
     ("请使用开关关闭全局快捷键", "Usa el interruptor para desactivar el atajo global"),
     ("已达到组合键上限，请保存或按退格修改", "Has llegado al límite de combinaciones; guarda o pulsa Retroceso para corregir"),
     ("按下组合键，回车保存 · Esc 取消 · 退格重录", "Pulsa un atajo · Intro guarda · Esc cancela · Retroceso vuelve a grabar"),
