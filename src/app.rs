@@ -1314,7 +1314,7 @@ impl Render for Workspace {
         // Clicks no longer take focus from the editor (see the root's mouse
         // down), so leaving the document hands it back to the window's keys.
         if self.view != View::Doc && self.editor.as_ref().is_some_and(|e| e.read(cx).focus.is_focused(window)) { window.focus(&self.focus); }
-        crate::editor::image::frame_drawn(window);
+        crate::editor::image::frame_drawn(window, cx);
         self.native_sidebar.sync(if self.sidebar_open { self.sidebar_w(window) } else { 0. }, window);
         let sidebar = if self.sidebar_open { Some(if matches!(self.view, View::Settings | View::Trash) { self.render_settings_sidebar(window, cx) } else { self.render_sidebar(window, cx) }) } else { None };
         let row_menu = self.render_row_menu(window, cx);

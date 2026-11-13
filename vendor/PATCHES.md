@@ -41,6 +41,7 @@ diff -ru $R/taffy-0.9.0/src vendor/taffy/src
 | 20 | `elements/img.rs`、`elements/image_cache.rs` | 图片缓存增加不触发加载的 `peek`；显式尺寸图片可选择延迟到可见区域绘制时才解码 | 卡片裁剪范围之外的图片不再预先解码；原始像素、尺寸和动图播放保持不变 |
 | 21 | `platform/mac/metal_atlas.rs` | 删除图片时立即移除 tile 索引，再递减所属纹理的引用计数 | 避免共享纹理仍被使用时残留旧索引，导致重复删除或复用失效 tile |
 | 22 | `platform/mac/platform.rs` | 读取剪贴板时同时保留文字和一种图片格式（优先 PNG），跳过空图片数据 | 截图工具同时提供文字和图片时，正文可选择图片，文本输入框仍可读取文字 |
+| 23 | `assets.rs`、`window.rs` | `RenderImage::with_scale_factor`；`RenderImage::hollow` 生成同 id、同尺寸、不带像素的空壳；`paint_image` 遇到 atlas 里没有的空壳时跳过并记下，由 `Window::take_missing_images` 取走 | 文档图片按显示尺寸解码后，布局仍按原图尺寸；已上传到 atlas 的图片不再在内存里留一份像素（docs/MEMORY.md） |
 
 
 ## taffy 0.9.0

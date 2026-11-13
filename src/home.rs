@@ -14,7 +14,7 @@ use crate::settings::display_title;
 use crate::model::BlockKind;
 use crate::search::doc_icon;
 use crate::store::Entry;
-use crate::editor::image::PictureExt;
+use crate::editor::image::picture;
 use crate::theme::{self, Theme};
 use crate::trash::{empty_state, list_header_text, list_line, menu_label, page_header, row_hover};
 use crate::ui::{ROW_RADIUS, TipExt, icon, menu_glyph, menu_row, popover, ui_text};
@@ -139,6 +139,13 @@ fn thumb_blocks(blocks: &[crate::model::Block], budget: &mut usize, depth: usize
     out
 }
 
+/// Home cards decode pictures at this share of the size they are drawn:
+/// a card is small and glanced at, so a softer picture costs nothing.
+const THUMB: f32 = 0.75;
+
+/// Long edge drawn for a picture `w` wide with this width / height `ratio`.
+fn thumb_long(w: f32, ratio: f32) -> f32 { (if ratio >= 1. { w } else { w / ratio }) * THUMB }
+
 fn thumb_block(b: &crate::model::Block, depth: usize, inherited: Hsla, quote: bool, eqnos: &EquationNumbers) -> AnyElement {
     thumb_block_in(b, depth, inherited, quote, false, 0, eqnos)
 }
@@ -162,7 +169,7 @@ fn thumb_block_in(b: &crate::model::Block, depth: usize, inherited: Hsla, quote:
             let media = div().relative().flex_none().w_full().max_w_full().overflow_hidden().when_some(*width, |d, w| d.w(px(w * s)))
                 .map(|mut d| { d.style().aspect_ratio = Some(ratio); d });
             node = node.child(if let Some(path) = path {
-                media.child(img(path).doc_picture().absolute().inset_0().size_full().min_w_0().min_h_0().rounded(px(bs::RADIUS * s)).object_fit(ObjectFit::Contain)).into_any_element()
+                media.child(picture(&path, thumb_long(width.unwrap_or(690.).min(690.), ratio) * s).absolute().inset_0().size_full().min_w_0().min_h_0().rounded(px(bs::RADIUS * s)).object_fit(ObjectFit::Contain)).into_any_element()
             } else {
                 media.rounded(px(bs::RADIUS * s)).bg(bs::code_surface()).flex().items_center().justify_center().child(icon("image-broken", 24. * s, Theme::text_disabled())).into_any_element()
             });
@@ -935,7 +942,7 @@ impl Workspace {
                             cx.notify();
                         }),
                     ))
-                    .when_some(cover, |d, path| d.child(img(path).doc_picture().absolute().inset_0().size_full().object_fit(ObjectFit::Fill)))
+                    .when_some(cover, |d, path| d.child(picture(&path, card_h * THUMB).absolute().inset_0().size_full().object_fit(ObjectFit::Fill)))
                     .child(crate::ui::continuous_page(20. - frame).size_full().overflow_hidden().child(page.relative()))
                     .child(crate::ui::continuous_corner_mask(20., Theme::bg_body()))
                     .when_some(check, |d, c| d.child(div().absolute().top(px(12.)).left(px(12.)).child(c)))

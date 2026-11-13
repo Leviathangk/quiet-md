@@ -4,6 +4,11 @@
 pub(crate) const APP_ID: &str = "com.s1dashu.quietmd";
 
 mod app;
+#[cfg(unix)]
+mod big_alloc;
+#[cfg(unix)]
+#[global_allocator]
+static ALLOC: big_alloc::Alloc = big_alloc::Alloc;
 mod shared_store;
 mod quick_note;
 mod assets;
@@ -73,6 +78,10 @@ fn set_app_icon() {
         let image: *mut Object = msg_send![class!(NSImage), alloc];
         let image: *mut Object = msg_send![image, initWithData:data];
         if !image.is_null() {
+            // AppKit draws the icon into a bitmap at the image's size in points
+            // and keeps it: the 1024 px PNG reads as 1024 pt, 2048² px (32 MB)
+            // on a Retina screen. The Dock shows at most 256 pt.
+            let _: () = msg_send![image, setSize: core_graphics::geometry::CGSize::new(256., 256.)];
             let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
             let _: () = msg_send![app, setApplicationIconImage:image];
             let _: () = msg_send![image, release];
