@@ -892,7 +892,8 @@ impl Workspace {
             .child(img(about_icon()).size(px(88.)))
             .child(div().text_size(px(20.)).line_height(px(26.)).font_weight(FontWeight::SEMIBOLD).child("Quiet.md"))
             .child(div().text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 5.)).text_color(Theme::text_caption()).child(format!("{} {}", tr("版本", "Version"), env!("CARGO_PKG_VERSION"))))
-            .child(div().text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).text_color(Theme::text_caption()).child(tr("本地优先的笔记应用：无需账号，文档就是你电脑上的文件。", "Local-first notes: no account, your documents are files on your Mac."))))
+            .child(div().text_size(px(theme::ui_font())).line_height(px(theme::ui_font() + 7.)).text_color(Theme::text_caption()).child(if cfg!(target_os = "macos") { tr("本地优先的笔记应用：无需账号，文档就是你电脑上的文件。", "Local-first notes: no account, your documents are files on your Mac.") }
+                else { tr("本地优先的笔记应用：无需账号，文档就是你电脑上的文件。", "Local-first notes: no account, your documents are files on your computer.") })))
             .child(group(None, vec![update_row(cx).into_any_element()]))
             .child(group(None, vec![row("Onboarding", Some(tr("在这个窗口上再走一遍首次启动的欢迎页（⌘⌥⇧O）；只会应用快捷键，不改动文档库", "Go through the first-launch pages again over this window (⌘⌥⇧O); only the shortcut is applied, the library stays as it is").into()),
                 button("replay-onboarding", tr("打开", "Open")).on_click(cx.listener(|w, _, window, cx| w.replay_onboarding(window, cx)))).into_any_element()]))
