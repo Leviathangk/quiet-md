@@ -111,12 +111,7 @@ fn thumb_blocks(blocks: &[crate::model::Block], budget: &mut usize, depth: usize
                 crate::model::InlineKind::Equation(_) => unreachable!(),
                 crate::model::InlineKind::File(file) => file.name.clone(),
                 crate::model::InlineKind::Button(button) => button.text.clone(),
-                crate::model::InlineKind::Reminder(reminder) => {
-                    if crate::settings::english() {
-                        let (y, m, d, h, mi) = crate::time::civil(reminder.expire.max(0) as u64 / 1000);
-                        if reminder.whole_day { format!("{y}-{m:02}-{d:02}") } else { format!("{y}-{m:02}-{d:02} {h:02}:{mi:02}") }
-                    } else { reminder.label(" ") }
-                },
+                crate::model::InlineKind::Reminder(reminder) => crate::editor::reminder::reminder_label(reminder, " "),
                 crate::model::InlineKind::DocLink(doc) => display_title(&doc.title).to_string(),
                 crate::model::InlineKind::Other { tag } => tag.clone(),
             }).map(|label| label.chars().take(160).collect::<String>());

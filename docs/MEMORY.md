@@ -88,7 +88,7 @@ python3 tools/perf/mem_probe.py tools/perf/mem/photos.txt /tmp/q-photos /tmp/q-r
 
 ### 2. 上传 GPU 后丢掉内存里的像素（采用）
 
-GPUI 只在第一次把图片放进 atlas 时读像素，之后每帧只用尺寸。vendor 补丁（PATCHES.md #23）：
+GPUI 只在第一次把图片放进 atlas 时读像素，之后每帧只用尺寸。vendor 补丁（PATCHES.md #24）：
 
 - 给 `RenderImage` 加 `hollow()`：同一个 ImageId、同样的尺寸，不带像素。
 - 所有窗口都画过这张图之后，缓存在下一次 sweep 把它换成空壳。
