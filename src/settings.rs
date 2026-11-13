@@ -9,23 +9,39 @@ use crate::sidebar as sb;
 use gpui::{prelude::FluentBuilder, *};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 // ---- preferences
 
 static FEISHU: AtomicBool = AtomicBool::new(false);
-static ENGLISH: AtomicBool = AtomicBool::new(true);
+static LANG: AtomicU8 = AtomicU8::new(Lang::En as u8);
 static MOTION_HIGH: AtomicBool = AtomicBool::new(false);
 static PREFS: RwLock<Option<Preferences>> = RwLock::new(None);
 
 /// The active document theme draws blocks the 飞书 way (else Craft's).
 pub fn feishu() -> bool { FEISHU.load(Ordering::Relaxed) }
 pub(crate) fn set_base(feishu: bool) { FEISHU.store(feishu, Ordering::Relaxed); }
-pub fn english() -> bool { ENGLISH.load(Ordering::Relaxed) }
+/// 界面语言, in the order Settings lists them. Chinese strings are the keys:
+/// other languages look them up in `l10n` and fall back to English.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Lang { Zh, En, Ko }
+
+impl Lang {
+    pub const ALL: [Lang; 3] = [Lang::Zh, Lang::En, Lang::Ko];
+    /// The `language` preference value.
+    pub fn code(self) -> &'static str { match self { Lang::Zh => "zh", Lang::En => "en", Lang::Ko => "ko" } }
+    pub fn pick<T>(self, zh: T, en: T, ko: T) -> T { match self { Lang::Zh => zh, Lang::En => en, Lang::Ko => ko } }
+}
+
+pub fn lang() -> Lang { Lang::ALL.get(LANG.load(Ordering::Relaxed) as usize).copied().unwrap_or(Lang::En) }
+/// Not Chinese: English, or a language that shows English where it has no string yet.
+pub fn english() -> bool { lang() != Lang::Zh }
 /// 外观 › 动画 is 丰富: folding, the selection and hover animate too (else they answer at once).
 pub fn motion_high() -> bool { MOTION_HIGH.load(Ordering::Relaxed) }
-pub fn tr(zh: &'static str, en: &'static str) -> &'static str { if english() { en } else { zh } }
+pub fn tr(zh: &'static str, en: &'static str) -> &'static str { match lang() { Lang::Zh => zh, Lang::En => en, l => crate::l10n::get(l, zh).unwrap_or(en) } }
+/// For text built in place rather than looked up (dates, counts).
+pub fn pick<T>(zh: T, en: T, ko: T) -> T { lang().pick(zh, en, ko) }
 
 /// Browsers 打开链接 can offer, by the name `open -a` takes. Only the ones
 /// this Mac actually has are listed; anything else is the system default.
@@ -68,7 +84,11 @@ pub struct Preferences {
     pub theme: String,
     /// The old two-way switch, still written so older builds keep the base style.
     pub feishu: bool,
+    /// Still written (true unless Chinese) so older builds show English for a language they lack.
     pub english: bool,
+    /// `Lang::code`; empty in files from before it, where `english` decides.
+    #[serde(default)]
+    pub language: String,
     /// Fetch `http(s)` images referenced by documents.
     pub remote_images: bool,
     /// The system-wide quick note hotkey is registered.
@@ -98,23 +118,30 @@ pub struct Preferences {
 }
 
 /// Pick the first supported system language; saved preferences still win.
-fn system_english() -> bool {
+fn system_lang() -> Lang {
     sys_locale::get_locales().find_map(|locale| {
-        match locale.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase().as_str() {
-            "zh" => Some(false),
-            "en" => Some(true),
-            _ => None,
-        }
-    }).unwrap_or(true)
+        let code = locale.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
+        Lang::ALL.into_iter().find(|l| l.code() == code)
+    }).unwrap_or(Lang::En)
 }
 
 impl Default for Preferences {
-    fn default() -> Self { Preferences { theme: String::new(), feishu: true, english: system_english(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), motion: String::new(), new_default: String::new(), last_new: String::new(), search_engine: String::new(), browser: String::new(), opaque_window: false, ui_font: String::new() } }
+    fn default() -> Self {
+        let lang = system_lang();
+        Preferences { theme: String::new(), feishu: true, english: lang != Lang::Zh, language: lang.code().into(), remote_images: true, quick_hotkey: true, auto_update: true, appearance: String::new(), seen_version: String::new(), motion: String::new(), new_default: String::new(), last_new: String::new(), search_engine: String::new(), browser: String::new(), opaque_window: false, ui_font: String::new() }
+    }
 }
 
 impl Preferences {
     pub fn theme_id(&self) -> String {
         if !self.theme.is_empty() { self.theme.clone() } else if self.feishu { "feishu".into() } else { "craft".into() }
+    }
+    pub fn lang(&self) -> Lang {
+        Lang::ALL.into_iter().find(|l| l.code() == self.language).unwrap_or(if self.english { Lang::En } else { Lang::Zh })
+    }
+    pub fn set_lang(&mut self, lang: Lang) {
+        self.language = lang.code().into();
+        self.english = lang != Lang::Zh;
     }
 }
 
@@ -127,7 +154,7 @@ pub fn load() {
 
 fn apply(p: Preferences) {
     FEISHU.store(p.feishu, Ordering::Relaxed);
-    ENGLISH.store(p.english, Ordering::Relaxed);
+    LANG.store(p.lang() as u8, Ordering::Relaxed);
     MOTION_HIGH.store(p.motion == "high", Ordering::Relaxed);
     // Before the themes are read (startup) the base comes from `feishu`.
     themes::select(&p.theme_id());
@@ -531,7 +558,7 @@ impl Workspace {
             if p.quick_hotkey { crate::quick_note::register(cx); } else { crate::quick_note::suspend_hotkey(); }
         }
         if p.appearance != old.appearance { apply_appearance(&p.appearance); }
-        if p.theme_id() != old.theme_id() || p.english != old.english || sync_dark(cx) {
+        if p.theme_id() != old.theme_id() || p.lang() != old.lang() || sync_dark(cx) {
             refresh_all(self, cx);
         }
         cx.notify();
@@ -683,7 +710,7 @@ impl Workspace {
         div().w_full().flex().flex_col().gap(px(28.))
             .child(group(None, vec![
                 row(tr("界面语言", "Interface language"), None,
-                    segmented("lang", &["简体中文", "English"], p.english as usize, |w, i, cx| w.set_pref(|p| p.english = i == 1, cx), cx)).into_any_element(),
+                    segmented("lang", &["简体中文", "English", "한국어"], p.lang() as usize, |w, i, cx| w.set_pref(|p| p.set_lang(Lang::ALL[i]), cx), cx)).into_any_element(),
                 row(tr("自动下载网络图片", "Download web images"), desc(tr("关闭后不联网，网络图片显示为占位，点击单独加载。", "When off the app stays offline; web images show a placeholder you can click to load.")),
                     switch("pref-remote", p.remote_images).on_click(cx.listener(|w, _, _, cx| w.set_pref(|p| p.remote_images = !p.remote_images, cx)))).into_any_element(),
                 row(tr("自动检查更新", "Check for updates automatically"), desc(tr("只读取一份版本信息，不发送任何数据；新版本由你决定何时下载安装。", "Reads a version file and sends nothing about you; you decide when to download and install.")),
@@ -787,7 +814,7 @@ impl Workspace {
             .child(group(None, vec![
                 row(tr("文档库文件夹", "Documents folder"), Some(location.into()),
                     button("reveal-library", reveal).on_click(|_, _, cx| cx.reveal_path(&crate::store::Store::root_dir()))).into_any_element(),
-                row(tr("回收站", "Trash"), Some(if english() { format!("Deleted documents are kept for {} days.", crate::store::TRASH_DAYS) } else { format!("删除的文档保留 {} 天后自动清除。", crate::store::TRASH_DAYS) }.into()),
+                row(tr("回收站", "Trash"), Some(crate::localized_format!("删除的文档保留 {} 天后自动清除。", "Deleted documents are kept for {} days.", crate::store::TRASH_DAYS).into()),
                     button("open-trash", tr("打开", "Open")).on_click(cx.listener(|w, _, _, cx| w.show_view(View::Trash, cx)))).into_any_element(),
             ]))
             .into_any_element()
@@ -874,9 +901,14 @@ fn about_icon() -> ImageSource {
     match &*ICON { Some(icon) => icon.clone().into(), None => PATH.into() }
 }
 
-pub fn label(text: impl AsRef<str>) -> String { localize(text.as_ref(), english()).to_string() }
+pub fn label(text: impl AsRef<str>) -> String { translate(text.as_ref(), lang()).to_string() }
 
-pub fn text(text: &str) -> &str { localize(text, english()) }
+pub fn text(text: &str) -> &str { translate(text, lang()) }
+
+/// `localize` for any language: its own string, else the English one.
+pub(crate) fn translate(text: &str, lang: Lang) -> &str {
+    match lang { Lang::Zh | Lang::En => localize(text, lang == Lang::En), l => crate::l10n::get(l, text).unwrap_or_else(|| localize(text, true)) }
+}
 
 pub(crate) fn localize(text: &str, english: bool) -> &str {
     if !english { return text; }
@@ -1326,7 +1358,12 @@ pub(crate) fn localize(text: &str, english: bool) -> &str {
 #[macro_export]
 macro_rules! localized_format {
     ($zh:literal, $en:literal $(, $arg:expr)* $(,)?) => {
-        if $crate::settings::english() { format!($en $(, $arg)*) } else { format!($zh $(, $arg)*) }
+        match $crate::settings::lang() {
+            $crate::settings::Lang::Zh => format!($zh $(, $arg)*),
+            $crate::settings::Lang::En => format!($en $(, $arg)*),
+            // Other languages translate the Chinese template; the values are read back out of the Chinese text.
+            l => $crate::l10n::refill(l, $zh, &format!($zh $(, $arg)*)).unwrap_or_else(|| format!($en $(, $arg)*)),
+        }
     };
 }
 
@@ -1338,7 +1375,12 @@ pub fn display_title(title: &str) -> String {
 
 /// Core diagnostics stay independent of UI language. Only known message templates
 /// are translated here; captured paths, document IDs and OS errors are preserved.
-pub fn diagnostic(message: &str) -> String { diagnostic_for(message, english()) }
+pub fn diagnostic(message: &str) -> String {
+    let l = lang();
+    if l != Lang::Zh && l != Lang::En
+        && let Some(s) = crate::l10n::get(l, message).map(str::to_string).or_else(|| crate::l10n::refill_any(l, message)) { return s; }
+    diagnostic_for(message, english())
+}
 
 fn diagnostic_for(message: &str, english: bool) -> String {
     if !english { return message.to_string(); }
@@ -1444,5 +1486,25 @@ mod preference_tests {
             let round_trip: Preferences = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
             assert_eq!(round_trip.theme_id(), expected);
         }
+    }
+
+    #[test]
+    fn language_comes_from_older_files_english_switch() {
+        use super::Lang;
+        for (json, expected) in [
+            (r#"{"english":false}"#, Lang::Zh),
+            (r#"{"english":true}"#, Lang::En),
+            (r#"{"english":true,"language":"ko"}"#, Lang::Ko),
+            (r#"{"english":true,"language":"xx"}"#, Lang::En),
+        ] {
+            let saved: Preferences = serde_json::from_str(json).unwrap();
+            assert_eq!(saved.lang(), expected, "{json}");
+        }
+        let mut p: Preferences = serde_json::from_str(r#"{"english":false}"#).unwrap();
+        p.set_lang(Lang::Ko);
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!((json["language"].as_str(), json["english"].as_bool()), (Some("ko"), Some(true)), "older builds read English");
+        p.set_lang(Lang::Zh);
+        assert!(!p.english);
     }
 }

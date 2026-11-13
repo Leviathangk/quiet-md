@@ -44,6 +44,7 @@ mod home_folder;
 mod folders;
 mod file_history;
 mod settings;
+mod l10n;
 mod themes;
 mod shortcuts;
 #[allow(dead_code, unused_imports)]

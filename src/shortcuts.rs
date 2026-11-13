@@ -1,7 +1,7 @@
 use gpui::*;
 use gpui::prelude::FluentBuilder;
 use std::collections::BTreeMap;
-use crate::{app::Workspace, settings::{english, tr}, theme::Theme};
+use crate::{app::Workspace, settings::tr, theme::Theme};
 
 pub struct Shortcuts { base: Vec<KeyBinding>, custom: BTreeMap<String, String> }
 impl Global for Shortcuts {}
@@ -228,7 +228,7 @@ fn info(name: &str) -> Option<(usize, &'static str, &'static str)> {
         _ => return None,
     })
 }
-pub fn label(name: &str) -> Option<&'static str> { info(name).map(|(_, zh, en)| if english() { en } else { zh }) }
+pub fn label(name: &str) -> Option<&'static str> { info(name).map(|(_, zh, en)| tr(zh, en)) }
 fn default_key(s: &Shortcuts, id: &str) -> String {
     if id == "global" { return GLOBAL_DEFAULT.into(); }
     if id.ends_with("::NewDoc") { return if cfg!(not(target_os = "macos")) { "ctrl-n" } else { "cmd-n" }.into(); }
@@ -492,7 +492,7 @@ impl Workspace {
             .children(groups.into_iter().enumerate().filter(|(_, rows)| !rows.is_empty()).map(|(g, rows)| {
                 let n = rows.len();
                 div().w_full().flex().flex_col().gap(px(8.))
-                    .child(div().px(px(4.)).text_size(px(13.)).line_height(px(18.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(if english() { GROUPS[g].1 } else { GROUPS[g].0 }))
+                    .child(div().px(px(4.)).text_size(px(13.)).line_height(px(18.)).font_weight(FontWeight::SEMIBOLD).text_color(Theme::sidebar_section()).child(tr(GROUPS[g].0, GROUPS[g].1)))
                     .child(div().w_full().flex().flex_col().rounded(px(12.)).border_1().border_color(Theme::line_border()).overflow_hidden()
                         .children(rows.into_iter().enumerate().map(move |(i, r)| div().w_full().flex().flex_col().when(i + 1 < n, |d| d.border_b_1().border_color(crate::ui::list_line())).child(r))))
             }))
