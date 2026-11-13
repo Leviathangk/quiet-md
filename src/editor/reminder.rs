@@ -8,6 +8,7 @@ use super::core::Pos;
 use super::overlays::{Probe, at};
 use super::view::{Editor, Menu};
 use crate::model::InlineReminder;
+use crate::settings::{Lang, translate};
 use crate::input::{TextField, TextFieldEvent};
 use crate::editor_theme::{Theme, c, craft};
 use crate::editor_ui::{ROW_RADIUS, icon, panel, popover};
@@ -83,28 +84,28 @@ fn weeks(t: i64) -> i64 {
 /// The chip text (`getTimeString`): 今天 / 明天 / 昨天 / 本周X / 下周X,
 /// then M月D日, then Y年M月D日 in another year; " HH:MM" when timed.
 pub fn time_string(expire: i64, timed: bool, now: i64) -> String {
-    time_string_for(expire, timed, now, crate::settings::english())
+    time_string_for(expire, timed, now, crate::settings::lang())
 }
 
-fn time_string_for(expire: i64, timed: bool, now: i64, english: bool) -> String {
+fn time_string_for(expire: i64, timed: bool, now: i64, lang: Lang) -> String {
     let (ey, em, ed) = ymd(expire);
     let (ny, nm, nd) = ymd(now);
     let (e, n) = (i64::from(ed), i64::from(nd));
     let mut s = if ey != ny {
-        if english { format!("{ey}-{em:02}-{ed:02}") } else { format!("{ey}年{em}月{ed}日") }
+        lang.pick(format!("{ey}年{em}月{ed}日"), format!("{ey}-{em:02}-{ed:02}"), format!("{ey}년 {em}월 {ed}일"))
     } else {
         let dw = weeks(expire) - weeks(now);
         if dw >= 2 || dw <= -1 {
-            if n - e == 1 && dw == -1 && em == nm { crate::settings::localize("昨天", english).into() } else { if english { format!("{em:02}-{ed:02}") } else { format!("{em}月{ed}日") } }
+            if n - e == 1 && dw == -1 && em == nm { translate("昨天", lang).into() } else { lang.pick(format!("{em}月{ed}日"), format!("{em:02}-{ed:02}"), format!("{em}월 {ed}일")) }
         } else if e == n {
-            crate::settings::localize("今天", english).into()
+            translate("今天", lang).into()
         } else if n - e == 1 {
-            crate::settings::localize("昨天", english).into()
+            translate("昨天", lang).into()
         } else if e - n == 1 {
-            crate::settings::localize("明天", english).into()
+            translate("明天", lang).into()
         } else {
-            let w = crate::settings::localize(WEEK[crate::time::weekday(ey, em, ed) as usize], english);
-            if dw >= 1 { if english { format!("Next {w}") } else { format!("下周{w}") } } else { if english { format!("This {w}") } else { format!("本周{w}") } }
+            let w = translate(WEEK[crate::time::weekday(ey, em, ed) as usize], lang);
+            if dw >= 1 { lang.pick(format!("下周{w}"), format!("Next {w}"), format!("다음 주 {w}요일")) } else { lang.pick(format!("本周{w}"), format!("This {w}"), format!("이번 주 {w}요일")) }
         }
     };
     if timed {
@@ -247,9 +248,11 @@ pub fn with_jet(r: &InlineReminder, jet: i64) -> InlineReminder {
 }
 
 pub(crate) fn reminder_label(r: &InlineReminder, sep: &str) -> String {
-    if !crate::settings::english() { return r.label(sep); }
+    let lang = crate::settings::lang();
+    if lang == Lang::Zh { return r.label(sep); }
     let (y, m, d, h, mi) = crate::time::civil(r.expire.max(0) as u64 / 1000);
-    if r.whole_day { format!("{y}-{m:02}-{d:02}") } else { format!("{y}-{m:02}-{d:02}{sep}{h:02}:{mi:02}") }
+    let day = if lang == Lang::Ko { format!("{y}년 {m}월 {d}일") } else { format!("{y}-{m:02}-{d:02}") };
+    if r.whole_day { day } else { format!("{day}{sep}{h:02}:{mi:02}") }
 }
 
 /// The system notification's body.
@@ -783,6 +786,7 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::{DAY, HOUR, MINUTE, current_slot, day_start, default_reminder, jet_lags, parse_time, status, time_slots, time_string_for, toggle, Status};
+    use crate::settings::Lang;
     use crate::model::InlineReminder;
     use crate::time::local_to_unix;
 
@@ -790,7 +794,7 @@ mod tests {
         local_to_unix(y, m, d, h, mi) * 1000
     }
 
-    fn time_string(expire: i64, timed: bool, now: i64) -> String { time_string_for(expire, timed, now, false) }
+    fn time_string(expire: i64, timed: bool, now: i64) -> String { time_string_for(expire, timed, now, Lang::Zh) }
 
     #[test]
     fn chip_text() {
@@ -810,13 +814,25 @@ mod tests {
     #[test]
     fn english_chip_text() {
         let now = t(2026, 10, 22, 10, 0);
-        assert_eq!(time_string_for(t(2026, 10, 22, 14, 0), true, now, true), "Today 14:00");
-        assert_eq!(time_string_for(t(2026, 10, 23, 0, 0), false, now, true), "Tomorrow");
-        assert_eq!(time_string_for(t(2026, 10, 21, 9, 5), true, now, true), "Yesterday 09:05");
-        assert_eq!(time_string_for(t(2026, 10, 25, 9, 0), false, now, true), "This Sun");
-        assert_eq!(time_string_for(t(2026, 10, 27, 9, 0), false, now, true), "Next Tue");
-        assert_eq!(time_string_for(t(2026, 11, 3, 9, 0), false, now, true), "11-03");
-        assert_eq!(time_string_for(t(2027, 1, 3, 9, 0), true, now, true), "2027-01-03 09:00");
+        assert_eq!(time_string_for(t(2026, 10, 22, 14, 0), true, now, Lang::En), "Today 14:00");
+        assert_eq!(time_string_for(t(2026, 10, 23, 0, 0), false, now, Lang::En), "Tomorrow");
+        assert_eq!(time_string_for(t(2026, 10, 21, 9, 5), true, now, Lang::En), "Yesterday 09:05");
+        assert_eq!(time_string_for(t(2026, 10, 25, 9, 0), false, now, Lang::En), "This Sun");
+        assert_eq!(time_string_for(t(2026, 10, 27, 9, 0), false, now, Lang::En), "Next Tue");
+        assert_eq!(time_string_for(t(2026, 11, 3, 9, 0), false, now, Lang::En), "11-03");
+        assert_eq!(time_string_for(t(2027, 1, 3, 9, 0), true, now, Lang::En), "2027-01-03 09:00");
+    }
+
+    #[test]
+    fn korean_chip_text() {
+        let now = t(2026, 10, 22, 10, 0);
+        assert_eq!(time_string_for(t(2026, 10, 22, 14, 0), true, now, Lang::Ko), "오늘 14:00");
+        assert_eq!(time_string_for(t(2026, 10, 23, 0, 0), false, now, Lang::Ko), "내일");
+        assert_eq!(time_string_for(t(2026, 10, 21, 9, 5), true, now, Lang::Ko), "어제 09:05");
+        assert_eq!(time_string_for(t(2026, 10, 25, 9, 0), false, now, Lang::Ko), "이번 주 일요일");
+        assert_eq!(time_string_for(t(2026, 10, 27, 9, 0), false, now, Lang::Ko), "다음 주 화요일");
+        assert_eq!(time_string_for(t(2026, 11, 3, 9, 0), false, now, Lang::Ko), "11월 3일");
+        assert_eq!(time_string_for(t(2027, 1, 3, 9, 0), true, now, Lang::Ko), "2027년 1월 3일 09:00");
     }
 
     #[test]

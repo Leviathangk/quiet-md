@@ -1688,7 +1688,7 @@ impl Editor {
                 .text_size(px(12.))
                 .line_height(px(22.))
                 .text_color(Theme::text_caption())
-                .child(if crate::settings::english() { format!("{n} {}", if n == 1 { "word" } else { "words" }) } else { format!("{n} 字") })
+                .child(crate::settings::pick(format!("{n} 字"), format!("{n} {}", if n == 1 { "word" } else { "words" }), format!("{n}자")))
                 .into_any_element(),
         )
     }
