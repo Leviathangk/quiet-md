@@ -59,6 +59,24 @@ fn ease(t: f32) -> f32 {
     if t < 0.5 { 4. * t * t * t } else { 1. - (-2. * t + 2.).powi(3) / 2. }
 }
 
+thread_local! { static CURRENT: std::cell::Cell<Option<(AnyWindowHandle, usize)>> = const { std::cell::Cell::new(None) }; }
+static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Move a scripted window off screen where it still renders (unless `FDL_NOPARK`).
+async fn park(ns_view: usize, cx: &mut AsyncApp) {
+    let _ = ns_view;
+    cx.background_executor().timer(Duration::from_millis(800)).await;
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("FDL_NOPARK").is_none() {
+        for origin in native::park_candidates(ns_view) {
+            native::place(ns_view, origin);
+            cx.background_executor().timer(Duration::from_millis(250)).await;
+            if native::is_visible(ns_view) { return }
+        }
+        eprintln!("devtools: no visible off-screen spot; window may stop rendering");
+    }
+}
+
 pub fn start(window: &mut Window, cx: &mut App) {
     let Ok(path) = std::env::var("FDL_SCRIPT") else { return };
     let Ok(script) = std::fs::read_to_string(&path) else {
@@ -68,28 +86,24 @@ pub fn start(window: &mut Window, cx: &mut App) {
     let handle = window.window_handle();
     #[cfg(target_os = "macos")]
     let Some(ns_view) = ns_view_of(window) else { return };
+    #[cfg(not(target_os = "macos"))]
+    let ns_view = 0usize;
     #[cfg(target_os = "macos")]
     native::no_app_nap();
+    // One script per run: a window opened later (first launch's pages hand
+    // over to the main window) becomes where the rest of it plays.
+    CURRENT.with(|c| c.set(Some((handle, ns_view))));
+    if RUNNING.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        cx.spawn(async move |cx| park(ns_view, cx).await).detach();
+        return;
+    }
     cx.spawn(async move |cx| {
-        cx.background_executor().timer(Duration::from_millis(800)).await;
-        #[cfg(target_os = "macos")]
-        if std::env::var_os("FDL_NOPARK").is_none() {
-            let mut parked = false;
-            for origin in native::park_candidates(ns_view) {
-                native::place(ns_view, origin);
-                cx.background_executor().timer(Duration::from_millis(250)).await;
-                if native::is_visible(ns_view) {
-                    parked = true;
-                    break;
-                }
-            }
-            if !parked {
-                eprintln!("devtools: no visible off-screen spot; window may stop rendering");
-            }
-        }
+        park(ns_view, cx).await;
         let mut recording: Option<std::rc::Rc<std::cell::Cell<bool>>> = None;
         // Only leading whitespace is insignificant: `type ab ` types a trailing space.
         for line in script.lines().map(str::trim_start).filter(|l| !l.trim().is_empty() && !l.starts_with('#')) {
+            let Some((handle, ns_view)) = CURRENT.with(|c| c.get()) else { break };
+            let _ = ns_view;
             let (cmd, rest) = line.split_once(' ').unwrap_or((line, ""));
             if cmd == "wait" {
                 // Draw invalidated frames ourselves: the display link stops
@@ -556,6 +570,7 @@ fn run(cmd: &str, rest: &str, window: &mut Window, cx: &mut App) {
     match cmd {
         // Synthesized right-button NSEvents report buttonNumber 0, so GPUI would
         // read them as left clicks; feed the right click to GPUI directly.
+        "forget-uploads" => eprintln!("devtools: forgot {} uploads", crate::editor::image::forget_uploads(window, cx)),
         "rclick" => {
             let n = nums(rest);
             if n.len() >= 2 {

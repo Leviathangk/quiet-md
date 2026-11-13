@@ -161,7 +161,7 @@ impl Writer<'_> {
     }
 
     /// A source as the file being written should say it: relative to the
-    /// file's folder when under it; a library asset (`assets/…`) stays
+    /// file's folder when under it; a library asset (`.assets/…`) stays
     /// relative in the library and becomes absolute outside it.
     fn keep(&mut self, src: &str, image: bool) -> String {
         if src.contains("://") && !src.starts_with("file://") || src.starts_with("data:") {
@@ -170,13 +170,13 @@ impl Writer<'_> {
         let Some(base) = self.opts.base else { return src.to_string() };
         let raw = Path::new(src.strip_prefix("file://").unwrap_or(src));
         let root = self.opts.library_root.map(Path::to_path_buf).unwrap_or_else(crate::store::Store::root_dir);
-        // Relative sources left after `parse_file` are the library's (`assets/…`).
+        // Relative sources left after `parse_file` are the library's (`.assets/…`).
         let abs = if raw.is_absolute() { raw.to_path_buf() } else { root.join(raw) };
         if let Ok(rel) = abs.strip_prefix(base) {
             return rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
         }
         // The library's own image or attachment: a copy beside the file.
-        let assets = root.join("assets");
+        let assets = crate::store::Store::assets_in(&root);
         match self.opts.name.filter(|_| abs.starts_with(&assets) && abs.is_file()) {
             Some(name) => self.beside(&abs, base, name, image),
             None => abs.to_string_lossy().into_owned(),

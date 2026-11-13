@@ -26,16 +26,16 @@ const MARKDOWN_EXTS: [&str; 4] = ["md", "markdown", "mark", "txt"];
 pub(crate) enum ImportKind { Markdown, Folder, DocxXml }
 
 /// 导入文件夹 refuses folders with more documents than this.
-const IMPORT_FOLDER_LIMIT: usize = 2000;
+pub(crate) const IMPORT_FOLDER_LIMIT: usize = 2000;
 /// Bigger files are not documents.
 const IMPORT_FILE_LIMIT: u64 = 32 * 1024 * 1024;
 
 /// A folder to import: its documents and the sub-folders that hold some.
-struct Scanned { name: String, dirs: Vec<Scanned>, docs: Vec<PathBuf>, files: usize }
+pub(crate) struct Scanned { name: String, dirs: Vec<Scanned>, docs: Vec<PathBuf>, pub(crate) files: usize }
 
 /// Markdown and DocxXML files under `dir`, by name; hidden folders,
 /// dependency folders and symlinks are skipped.
-fn scan_folder(dir: &Path, depth: usize) -> Option<Scanned> {
+pub(crate) fn scan_folder(dir: &Path, depth: usize) -> Option<Scanned> {
     let name = dir.file_name()?.to_string_lossy().into_owned();
     let mut t = Scanned { name, dirs: vec![], docs: vec![], files: 0 };
     if depth > 32 { return Some(t); }
@@ -56,6 +56,33 @@ fn scan_folder(dir: &Path, depth: usize) -> Option<Scanned> {
         if t.files > IMPORT_FOLDER_LIMIT { break; }
     }
     Some(t)
+}
+
+/// A Markdown file as a new Markdown document inside `parent`.
+pub(crate) fn import_markdown(store: &mut crate::store::Store, path: &Path, parent: Option<&str>) -> anyhow::Result<String> {
+    let bytes = crate::store::read_bounded(path, IMPORT_FILE_LIMIT)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let text = text.trim_start_matches('\u{feff}');
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().trim().to_string();
+    let mut doc = crate::markdown::parse_file(text, &stem, path.parent());
+    crate::editor::image::localize_pasted_images(&mut doc.blocks);
+    if doc.blocks.is_empty() { doc.blocks.push(Block::text("")); }
+    store.create_markdown_in(&doc, crate::markdown::front_matter(text).0, parent)
+}
+
+/// One scanned folder as a library folder under `parent`; its id. Needs no
+/// window, so 欢迎页 can import on a background thread before the main window.
+pub(crate) fn import_tree(store: &mut crate::store::Store, t: &Scanned, parent: Option<&str>, failed: &mut usize) -> Option<String> {
+    let id = match store.create_folder(&t.name, parent) {
+        Ok(id) => id,
+        Err(_) => { *failed += t.files; return None; }
+    };
+    for sub in &t.dirs { import_tree(store, sub, Some(&id), failed); }
+    for p in &t.docs {
+        let made = if crate::local_files::is_markdown_path(p) { import_markdown(store, p, Some(&id)) } else { store.import_into(p, Some(&id)) };
+        if made.is_err() { *failed += 1; }
+    }
+    Some(id)
 }
 
 fn downloads() -> PathBuf {
@@ -328,23 +355,23 @@ impl Workspace {
         let mut last = None;
         let mut failed = false;
         let file_before = self.store.track_file_changes();
+        // One write for all the files: without it each one rewrote the whole index.
+        let batch = self.store.begin_batch().is_ok();
         for p in paths {
             let ext = p.extension().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
+            let into = parent.as_deref();
             let made = match ext.as_str() {
-                _ if crate::local_files::is_markdown_path(p) => self.import_markdown(p, None),
-                e if MARKDOWN_EXTS.contains(&e) => markdown_document(p).map_err(anyhow::Error::from).and_then(|doc| self.store.create_from(&doc)),
-                "xml" => self.store.import(p),
+                _ if crate::local_files::is_markdown_path(p) => self.import_markdown(p, into),
+                e if MARKDOWN_EXTS.contains(&e) => markdown_document(p).map_err(anyhow::Error::from).and_then(|doc| self.store.create_from_in(&doc, into)),
+                "xml" => self.store.import_into(p, into),
                 _ => Err(anyhow::anyhow!("文件格式不支持")),
-            };
-            let made = match (made, parent.as_deref()) {
-                (Ok(id), Some(folder)) => self.store.set_parent(&id, Some(folder)).map(|_| id),
-                (made, _) => made,
             };
             match made {
                 Ok(id) => last = Some(id),
                 Err(_) => failed = true,
             }
         }
+        if batch && self.store.end_batch().is_err() { failed = true; }
         self.remember_files(file_before, crate::settings::tr("导入", "Import"));
         self.entries = self.store.list();
         self.sort();
@@ -421,16 +448,7 @@ impl Workspace {
     /// A Markdown file copied into the library, still Markdown: its local
     /// images are copied into the library's assets.
     fn import_markdown(&mut self, path: &Path, parent: Option<&str>) -> anyhow::Result<String> {
-        let bytes = crate::store::read_bounded(path, IMPORT_FILE_LIMIT)?;
-        let text = String::from_utf8_lossy(&bytes);
-        let text = text.trim_start_matches('\u{feff}');
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().trim().to_string();
-        let mut doc = crate::markdown::parse_file(text, &stem, path.parent());
-        crate::editor::image::localize_pasted_images(&mut doc.blocks);
-        if doc.blocks.is_empty() { doc.blocks.push(Block::text("")); }
-        let id = self.store.create_markdown(&doc, crate::markdown::front_matter(text).0)?;
-        if parent.is_some() { self.store.set_parent(&id, parent)?; }
-        Ok(id)
+        self.store.with(|s| import_markdown(s, path, parent))
     }
 
     /// 导入文件夹: pick a folder; it lands at the top of 我的文档 as a folder,
@@ -456,7 +474,12 @@ impl Workspace {
         }
         let file_before = self.store.track_file_changes();
         let mut failed = 0;
-        let top = self.import_tree(&tree, parent.as_deref(), &mut failed);
+        // One write for the whole folder: each file is written where it
+        // goes and the index once at the end (120 notes took 7 s one by one).
+        // Without the batch each file is still written on its own.
+        let batch = self.store.begin_batch().is_ok();
+        let top = self.store.with(|s| import_tree(s, &tree, parent.as_deref(), &mut failed));
+        let saved = if batch { self.store.end_batch() } else { Ok(()) };
         self.remember_files(file_before, crate::settings::tr("导入文件夹", "Import folder"));
         self.entries = self.store.list();
         self.sort();
@@ -464,25 +487,12 @@ impl Workspace {
             self.reveal_in_tree(&id);
             if open { self.open(&id, window, cx); }
         }
-        if failed > 0 {
+        if let Err(e) = saved {
+            self.show_toast_kind(ToastKind::Error, &crate::localized_format!("导入未能完成：{}", "Import could not finish: {}", crate::settings::diagnostic(&e.to_string())), cx);
+        } else if failed > 0 {
             self.show_toast_kind(ToastKind::Error, &crate::localized_format!("有 {failed} 个文件未能导入", "{failed} files could not be imported"), cx);
         }
         cx.notify();
-    }
-
-    /// One scanned folder as a library folder under `parent`; its id.
-    fn import_tree(&mut self, t: &Scanned, parent: Option<&str>, failed: &mut usize) -> Option<String> {
-        let id = match self.store.create_folder(&t.name, parent) {
-            Ok(id) => id,
-            Err(_) => { *failed += t.files; return None; }
-        };
-        for sub in &t.dirs { self.import_tree(sub, Some(&id), failed); }
-        for p in &t.docs {
-            let made = if crate::local_files::is_markdown_path(p) { self.import_markdown(p, Some(&id)) }
-                else { self.store.import(p).and_then(|doc| self.store.set_parent(&doc, Some(&id)).map(|_| doc)) };
-            if made.is_err() { *failed += 1; }
-        }
-        Some(id)
     }
 
     /// 导出 Markdown 设置 as a modal: white, radius 16, a 15pt semibold
