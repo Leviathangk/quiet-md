@@ -345,6 +345,20 @@ pub(crate) fn switch(id: impl Into<ElementId>, on: bool) -> Stateful<Div> {
         .child(div().size(px(15.)).rounded_full().bg(gpui::white()).shadow(theme::shadow_button()))
 }
 
+/// 外观 › 主题 CSS (duplicate, edit, restore a theme's stylesheet): hidden in
+/// this release while editing themes by hand settles.
+const THEME_CSS: bool = false;
+
+/// An open dropdown on 通用 (see `Workspace::select`): its choices, which one
+/// is picked and which is highlighted, and what picking one does.
+pub struct PrefMenu {
+    id: &'static str,
+    labels: Vec<&'static str>,
+    selected: usize,
+    focused: usize,
+    on: std::rc::Rc<dyn Fn(&mut Workspace, usize, &mut Context<Workspace>)>,
+}
+
 /// A segmented control: a grey groove and a white selected pill.
 fn segmented(id: &'static str, labels: &[&'static str], selected: usize, on: impl Fn(&mut Workspace, usize, &mut Context<Workspace>) + Clone + 'static, cx: &mut Context<Workspace>) -> Div {
     div().flex_none().h(px(28.)).p(px(2.)).flex().gap(px(2.)).rounded(px(9.)).bg(Theme::fill_hover_strong())
@@ -548,6 +562,66 @@ impl Workspace {
         Some(deferred(anchored().anchor(Corner::TopRight).position(point(b.right(), b.bottom() + px(4.))).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(2).into_any_element())
     }
 
+    /// A choice as a dropdown button, like 界面语言's: the picked label, a menu of the rest.
+    fn select(&self, id: &'static str, labels: Vec<&'static str>, selected: usize, on: impl Fn(&mut Workspace, usize, &mut Context<Workspace>) + 'static, cx: &mut Context<Self>) -> Stateful<Div> {
+        let open = self.pref_menu.as_ref().is_some_and(|m| m.id == id);
+        let anchors = self.pref_anchors.clone();
+        let on: std::rc::Rc<dyn Fn(&mut Workspace, usize, &mut Context<Workspace>)> = std::rc::Rc::new(on);
+        popup_button(id, labels.get(selected).copied().unwrap_or_default(), open)
+            .child(canvas(move |b, _, _| { anchors.borrow_mut().insert(id, b); }, |_, _, _, _| {}).absolute().inset_0())
+            .relative()
+            .on_click(cx.listener(move |w, _, _, cx| {
+                w.lang_menu = None;
+                w.pref_menu = (!open).then(|| PrefMenu { id, labels: labels.clone(), selected, focused: selected, on: on.clone() });
+                cx.notify();
+            }))
+    }
+
+    pub(crate) fn render_pref_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let m = self.pref_menu.as_ref()?;
+        if self.view != View::Settings || self.settings_page != Page::General { return None }
+        let b = *self.pref_anchors.borrow().get(m.id)?;
+        let rows = m.labels.iter().enumerate().map(|(i, label)| {
+            let g = SharedString::from(format!("{}-opt-{i}", m.id));
+            ui::menu_row(g.clone(), g.clone())
+                .when(i == m.focused, |d| d.bg(Theme::fill_hover()))
+                .child(div().flex_1().min_w_0().overflow_hidden().child(ui::menu_label(*label, g.clone(), gpui::white())))
+                .child(div().flex_none().w(px(14.)).when(i == m.selected, |d| d.child(ui::menu_glyph("check", 14., g.clone()))))
+                .on_hover(cx.listener(move |w, hovered: &bool, _, cx| if *hovered && let Some(m) = &mut w.pref_menu && m.focused != i { m.focused = i; cx.notify(); }))
+                .on_click(cx.listener(move |w, _, _, cx| w.pick_pref(i, cx)))
+        }).collect::<Vec<_>>();
+        let anchors = self.pref_anchors.clone();
+        let id = m.id;
+        let menu = ui::popover().id("pref-menu").occlude().flex()
+            .on_mouse_down_out(cx.listener(move |w, ev: &MouseDownEvent, _, cx| {
+                if anchors.borrow().get(id).is_some_and(|b| b.contains(&ev.position)) { return }
+                w.pref_menu = None;
+                cx.notify();
+            }))
+            .child(div().min_w(px(160.)).py(px(ui::MENU_PAD_Y)).flex().flex_col().children(rows));
+        Some(deferred(anchored().anchor(Corner::TopRight).position(point(b.right(), b.bottom() + px(4.))).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(2).into_any_element())
+    }
+
+    fn pick_pref(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some(m) = self.pref_menu.take() else { return };
+        (m.on)(self, i, cx);
+        cx.notify();
+    }
+
+    /// Keys while a 通用 dropdown is open; true when used.
+    pub(crate) fn pref_menu_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+        let Some(m) = &mut self.pref_menu else { return false };
+        match key {
+            "escape" => self.pref_menu = None,
+            "up" => m.focused = m.focused.saturating_sub(1),
+            "down" => m.focused = (m.focused + 1).min(m.labels.len().saturating_sub(1)),
+            "enter" | "space" => { let i = m.focused; self.pick_pref(i, cx); return true }
+            _ => return false,
+        }
+        cx.notify();
+        true
+    }
+
     /// 界面语言's dropdown, each language in its own name.
     pub(crate) fn render_lang_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let focused = self.lang_menu?;
@@ -665,6 +739,7 @@ impl Workspace {
         self.settings_page = page;
         self.theme_menu = None;
         self.lang_menu = None;
+        self.pref_menu = None;
         self.settings_scroll.set_offset(point(px(0.), px(0.)));
         self.shortcut_error = None;
         if self.view != View::Settings { self.show_view(View::Settings, cx); }
@@ -762,7 +837,7 @@ impl Workspace {
             let sel = browsers.iter().position(|b| *b == p.browser).map_or(0, |i| i + 1);
             let labels: Vec<&'static str> = std::iter::once(tr("系统默认", "Default")).chain(browsers.iter().copied()).collect();
             vec![row(tr("打开链接", "Open links"), desc(tr("点击链接时用哪个浏览器打开；网页搜索也用它。", "Which browser a link opens in; “Web search” uses it too.")), {
-                segmented("browser", &labels, sel, |w, i, cx| {
+                self.select("browser", labels, sel, |w, i, cx| {
                     let app = crate::settings::browser_at(i);
                     w.set_pref(|p| p.browser = app.clone(), cx)
                 }, cx)
@@ -776,7 +851,7 @@ impl Workspace {
                     popup_button("lang-picker", current.name(), self.lang_menu.is_some())
                         .child(canvas(move |b, _, _| anchor.set(Some(b)), |_, _, _, _| {}).absolute().inset_0())
                         .relative()
-                        .on_click(cx.listener(move |w, _, _, cx| { w.lang_menu = if w.lang_menu.is_some() { None } else { Some(current) }; cx.notify(); }))
+                        .on_click(cx.listener(move |w, _, _, cx| { w.pref_menu = None; w.lang_menu = if w.lang_menu.is_some() { None } else { Some(current) }; cx.notify(); }))
                 }).into_any_element(),
                 row(tr("自动下载网络图片", "Download web images"), desc(tr("关闭后不联网，网络图片显示为占位，点击单独加载。", "When off the app stays offline; web images show a placeholder you can click to load.")),
                     switch("pref-remote", p.remote_images).on_click(cx.listener(|w, _, _, cx| w.set_pref(|p| p.remote_images = !p.remote_images, cx)))).into_any_element(),
@@ -784,14 +859,14 @@ impl Workspace {
                     switch("pref-update", p.auto_update).on_click(cx.listener(|w, _, _, cx| w.set_pref(|p| p.auto_update = !p.auto_update, cx)))).into_any_element(),
                 row(tr("快捷新建默认类型", "Quick new (⌘N)"), desc(tr("⌘N 新建时创建的类型；「记住上次」沿用你上次从新建菜单选的类型。", "What ⌘N creates; “Last used” repeats the type you last picked from the New menu.")), {
                     let sel = match p.new_default.as_str() { "doc" => 1, "markdown" => 2, _ => 0 };
-                    segmented("quick-new", &[tr("记住上次", "Last used"), tr("文档", "Document"), "Markdown"], sel,
+                    self.select("quick-new", vec![tr("记住上次", "Last used"), tr("文档", "Document"), "Markdown"], sel,
                         |w, i, cx| w.set_pref(|p| p.new_default = ["", "doc", "markdown"][i].into(), cx), cx)
                 }).into_any_element(),
                 // 网页搜索 opens the selection in the browser; which site is the
                 // user's habit, so it is a preference rather than a constant.
                 row(tr("网页搜索", "Web search"), desc(tr("选中文字后「网页搜索」用哪个网站。", "Which site “Web search” opens the selected text in.")), {
                     let sel = match p.search_engine.as_str() { "bing" => 1, "google" => 2, "duckduckgo" => 3, _ => 0 };
-                    segmented("search-engine", &[tr("百度", "Baidu"), "Bing", "Google", "DuckDuckGo"], sel,
+                    self.select("search-engine", vec![tr("百度", "Baidu"), "Bing", "Google", "DuckDuckGo"], sel,
                         |w, i, cx| w.set_pref(|p| p.search_engine = ["", "bing", "google", "duckduckgo"][i].into(), cx), cx)
                 }).into_any_element(),
             ].into_iter().chain(links).collect()))
@@ -857,13 +932,14 @@ impl Workspace {
                     }).into_any_element(),
                     row(tr("文档主题", "Document theme"), None, picker).into_any_element(),
                     sample.into_any_element(),
+                ].into_iter().chain(THEME_CSS.then(|| {
                     row(tr("主题 CSS", "Theme CSS"), Some(where_),
                         div().flex().items_center().gap(px(8.))
                             .when(customized || own, |d| d.child(link_button("theme-remove", if customized { tr("恢复默认", "Restore") } else { tr("删除", "Delete") })
                                 .on_click(cx.listener(move |w, _, _, cx| w.remove_theme(&rm_id, cx)))))
                             .child(button("theme-duplicate", tr("复制为新主题", "Duplicate")).on_click(cx.listener(move |w, _, _, cx| w.duplicate_theme(&dup_id, cx))))
-                            .child(button("theme-edit", tr("编辑 CSS", "Edit CSS")).on_click(cx.listener(move |w, _, _, cx| w.edit_theme(&edit_id, cx))))).into_any_element(),
-                ]))
+                            .child(button("theme-edit", tr("编辑 CSS", "Edit CSS")).on_click(cx.listener(move |w, _, _, cx| w.edit_theme(&edit_id, cx))))).into_any_element()
+                })).collect()))
                 .children(errors.into_iter().chain(warnings.into_iter().take(8).map(|w| format!("{}：{w}", tr("未生效", "Ignored")))).map(|e| div().px(px(4.)).text_size(px(theme::ui_font_small())).line_height(px(theme::ui_font_small() + 6.)).text_color(Theme::danger()).child(e)))
                 )
             .into_any_element()
