@@ -730,4 +730,5 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("下周{w}", "El próximo {w}"),
     ("本周{w}", "Este {w}"),
     ("{n} 字", "{n} palabras"),
+    ("已有同名文件：{}", "Ya existe un archivo con este nombre: {}"),
 ];
