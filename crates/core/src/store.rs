@@ -375,6 +375,9 @@ fn write_atomic_then(path: &std::path::Path, bytes: &[u8], sync_dir: bool) -> Re
         std::fs::rename(&tmp, path)?;
         #[cfg(unix)]
         if sync_dir && let Some(parent) = path.parent() { std::fs::File::open(parent)?.sync_all()?; }
+        // Windows has no directory fsync; the rename is as far as it goes.
+        #[cfg(not(unix))]
+        let _ = sync_dir;
         Ok(())
     })();
     if result.is_err() { let _ = std::fs::remove_file(&tmp); }
@@ -2737,6 +2740,9 @@ mod tests {
         std::fs::write(lib.0.join("preferences.json"), b"{\"old\":1}").unwrap();
         let original = std::fs::read(lib.0.join("docs").join(format!("{a}.xml"))).unwrap();
         let mut s = lib.migrated();
+        // Edits are told from the move by modification time; some file
+        // systems stamp a little behind the clock, so leave a gap.
+        std::thread::sleep(std::time::Duration::from_millis(50));
         s.save(&a, &doc("甲改")).unwrap();
         s.create_from(&doc("新的")).unwrap();
         std::fs::write(lib.0.join(".quiet/preferences.json"), b"{\"new\":1}").unwrap();
