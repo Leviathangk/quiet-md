@@ -823,6 +823,8 @@ pub struct Window {
     pub(crate) platform_window: Box<dyn PlatformWindow>,
     display_id: Option<DisplayId>,
     sprite_atlas: Arc<dyn PlatformAtlas>,
+    /// quiet.md: hollow images painted without a tile since the last take.
+    missing_images: Vec<crate::ImageId>,
     text_system: Arc<WindowTextSystem>,
     rem_size: Pixels,
     /// The stack of override values for the window's rem size.
@@ -1211,6 +1213,7 @@ impl Window {
             platform_window,
             display_id,
             sprite_atlas,
+            missing_images: Vec::new(),
             text_system,
             rem_size: px(16.),
             rem_size_override_stack: SmallVec::new(),
@@ -3166,18 +3169,18 @@ impl Window {
             frame_index,
         };
 
-        let tile = self
+        // quiet.md: a hollow image not in this atlas is skipped and listed.
+        let Some(tile) = self
             .sprite_atlas
             .get_or_insert_with(&params.into(), &mut || {
-                Ok(Some((
-                    data.size(frame_index),
-                    Cow::Borrowed(
-                        data.as_bytes(frame_index)
-                            .expect("It's the caller's job to pass a valid frame index"),
-                    ),
-                )))
+                Ok(data.as_bytes(frame_index).map(|bytes| (data.size(frame_index), Cow::Borrowed(bytes))))
             })?
-            .expect("Callback above only returns Some");
+        else {
+            // Ask for one more frame: the owner decodes it again when it next renders.
+            if self.missing_images.is_empty() { self.on_next_frame(|window, _| window.refresh()); }
+            self.missing_images.push(data.id);
+            return Ok(());
+        };
         let content_mask = self.content_mask().scale(scale_factor);
         let corner_radii = corner_radii.scale(scale_factor);
         let opacity = self.element_opacity();
@@ -3215,6 +3218,12 @@ impl Window {
             content_mask,
             image_buffer,
         });
+    }
+
+    /// quiet.md: hollow images (`RenderImage::hollow`) this window could not
+    /// draw since the last call: their owner should decode them again.
+    pub fn take_missing_images(&mut self) -> Vec<crate::ImageId> {
+        std::mem::take(&mut self.missing_images)
     }
 
     /// Removes an image from the sprite atlas.

@@ -556,6 +556,7 @@ fn run(cmd: &str, rest: &str, window: &mut Window, cx: &mut App) {
     match cmd {
         // Synthesized right-button NSEvents report buttonNumber 0, so GPUI would
         // read them as left clicks; feed the right click to GPUI directly.
+        "forget-uploads" => eprintln!("devtools: forgot {} uploads", crate::editor::image::forget_uploads(window, cx)),
         "rclick" => {
             let n = nums(rest);
             if n.len() >= 2 {
