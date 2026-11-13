@@ -262,15 +262,18 @@ impl Workspace {
         let view = printing::parent_of(window);
         cx.spawn_in(window, async move |this, cx| {
             let Some(mut path) = path.await else { return };
-
-            let has_pdf_extension = path.extension()
-                .and_then(|ext| ext.to_str())
-                .map_or(false, |ext| ext.eq_ignore_ascii_case("pdf"));
-
-            if !has_pdf_extension {
-                path.set_extension("pdf");
+            // The save panel lets the name lose its `.pdf`; add it back, but never
+            // replace a file the panel didn't ask about.
+            if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+                let mut p = path.into_os_string();
+                p.push(".pdf");
+                path = PathBuf::from(p);
+                if path.exists() {
+                    let msg = crate::localized_format!("已有同名文件：{}", "A file with this name already exists: {}", path.display());
+                    let _ = this.update(cx, |w, cx| w.show_toast_kind(ToastKind::Error, &msg, cx));
+                    return;
+                }
             }
-
             let _ = this.update(cx, |w, cx| w.show_toast_kind(ToastKind::Info, crate::settings::text("正在导出文档"), cx));
             let html = crate::html::to_html(&doc, &crate::html::Options { sub_pages: &subs });
             let _ = std::fs::remove_file(&path);
