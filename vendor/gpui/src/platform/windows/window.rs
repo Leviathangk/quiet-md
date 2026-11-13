@@ -58,6 +58,8 @@ pub struct WindowsWindowState {
     fullscreen: Option<StyleAndBounds>,
     initial_placement: Option<WindowOpenStatus>,
     hwnd: HWND,
+    // quiet.md: applied again after device lost, which drops the blur behind.
+    pub(crate) background_appearance: Option<WindowBackgroundAppearance>,
 }
 
 pub(crate) struct WindowsWindowInner {
@@ -143,6 +145,7 @@ impl WindowsWindowState {
             fullscreen,
             initial_placement,
             hwnd,
+            background_appearance: None,
         })
     }
 
@@ -756,23 +759,8 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
-        let hwnd = self.0.hwnd;
-
-        match background_appearance {
-            WindowBackgroundAppearance::Opaque => {
-                // ACCENT_DISABLED
-                set_window_composition_attribute(hwnd, None, 0);
-            }
-            WindowBackgroundAppearance::Transparent => {
-                // Use ACCENT_ENABLE_TRANSPARENTGRADIENT for transparent background
-                set_window_composition_attribute(hwnd, None, 2);
-            }
-            WindowBackgroundAppearance::Blurred => {
-                // Enable acrylic blur
-                // ACCENT_ENABLE_ACRYLICBLURBEHIND
-                set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
-            }
-        }
+        self.0.state.borrow_mut().background_appearance = Some(background_appearance);
+        apply_background_appearance(self.0.hwnd, background_appearance);
     }
 
     fn minimize(&self) {
@@ -1314,6 +1302,26 @@ fn retrieve_window_placement(
     let bounds = bounds.to_device_pixels(scale_factor);
     placement.rcNormalPosition = calculate_window_rect(bounds, border_offset);
     Ok(placement)
+}
+
+// quiet.md: split out of `set_background_appearance` so device-lost recovery can
+// apply it again.
+pub(crate) fn apply_background_appearance(hwnd: HWND, background_appearance: WindowBackgroundAppearance) {
+    match background_appearance {
+        WindowBackgroundAppearance::Opaque => {
+            // ACCENT_DISABLED
+            set_window_composition_attribute(hwnd, None, 0);
+        }
+        WindowBackgroundAppearance::Transparent => {
+            // Use ACCENT_ENABLE_TRANSPARENTGRADIENT for transparent background
+            set_window_composition_attribute(hwnd, None, 2);
+        }
+        WindowBackgroundAppearance::Blurred => {
+            // Enable acrylic blur
+            // ACCENT_ENABLE_ACRYLICBLURBEHIND
+            set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
+        }
+    }
 }
 
 fn set_window_composition_attribute(hwnd: HWND, color: Option<Color>, state: u32) {

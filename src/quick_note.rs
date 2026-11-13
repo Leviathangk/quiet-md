@@ -173,10 +173,22 @@ pub fn persist(cx: &mut App) {
     if let Err(e) = store.save_settings(&settings) { eprintln!("无法保存窗口尺寸：{e}"); }
 }
 
-/// The main window's size: last used, or 1280 × 800.
+/// The main window's size: last used, or 1280 × 800 (also before there is a library).
 pub fn main_window_size(cx: &App) -> gpui::Size<Pixels> {
-    let s = cx.global::<crate::shared_store::SharedStore>().settings().window_size.unwrap_or([1280., 800.]);
+    let s = cx.try_global::<crate::shared_store::SharedStore>().and_then(|s| s.settings().window_size).unwrap_or_else(|| first_window_size(cx));
     size(px(s[0].max(480.)), px(s[1].max(480.)))
+}
+
+/// The first window, before the user has sized one: 1280×800. At 16:10 the
+/// first-launch film fills it with little cropped, and the 280pt sidebar
+/// leaves the notes 1000. A screen too small for it gets the same shape,
+/// shrunk to leave room for the menu bar and the Dock.
+/// `QUIET_MD_WINDOW=1280x800` sets it instead, for previews at a given size.
+fn first_window_size(cx: &App) -> [f32; 2] {
+    if let Some((w, h)) = std::env::var("QUIET_MD_WINDOW").ok().and_then(|v| { let (w, h) = v.split_once('x')?; Some((w.parse().ok()?, h.parse().ok()?)) }) { return [w, h] }
+    let Some(d) = cx.primary_display().map(|d| d.bounds().size) else { return [1280., 800.] };
+    let k = ((f32::from(d.width) - 40.) / 1280.).min(f32::from(d.height) * 0.84 / 800.).min(1.);
+    [(1280. * k).round(), (800. * k).round()]
 }
 
 #[cfg(target_os = "macos")]

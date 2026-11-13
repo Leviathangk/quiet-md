@@ -11,8 +11,9 @@ Quiet.md 是一个单进程 GPUI 应用（Rust，约 4 万行）。一篇文档�
 
 ```
 main.rs ─ 窗口
+  ├─ onboarding.rs  首次启动的引导页；选定文档库后，同一个窗口换成 Workspace
   └─ app.rs  Workspace（窗口根视图）
-       ├─ store.rs        文档库：docs/*.xml + index.json（见 FORMAT.md）           [core]
+       ├─ store.rs        文档库：真实文件夹 + .quiet/index.json（见 FORMAT.md）           [core]
        ├─ sidebar / home / search / trash / tree / docmenu / docinfo / modes
        └─ editor::Editor（view.rs）   打开的那篇文档
             └─ editor::Core（core.rs） 文档 + 选区 + 撤销栈                        [core]

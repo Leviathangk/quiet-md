@@ -15,6 +15,10 @@ const RADIUS: f32 = 12.;
 /// Each version's notes: (version, [(中文, English)]). Only the running
 /// version's are shown; a version without notes shows nothing.
 const NOTES: &[(&str, &[(&str, &str)])] = &[
+    ("0.1.11", &[
+        ("文档库改为真实文件夹：访达里看到的就是侧栏，文件以标题命名；同步盘里的文档库会先征求同意再改", "The library is now real folders: Finder shows what the sidebar shows, files named by title; a library in a synced folder asks first"),
+        ("全新的首次启动：选择文档库位置、设置随手记快捷键，并可从 Obsidian、Logseq、Typora 等导入已有笔记", "A new first launch: pick where the library lives, set the quick-note shortcut, and bring notes from Obsidian, Logseq, Typora and more"),
+    ]),
     ("0.1.10", &[
         ("Linux AppImage 支持应用内检查、下载并重启更新", "Check, download, and restart to update the Linux AppImage in the app"),
         ("新建菜单可选择文档、Markdown 或文件夹，快捷新建支持记住上次类型", "Choose Document, Markdown, or Folder from the New menu; quick creation can remember your last choice"),
@@ -61,6 +65,11 @@ const NOTES: &[(&str, &[(&str, &str)])] = &[
 ];
 
 static PENDING: AtomicBool = AtomicBool::new(false);
+/// The library just moved to real folders: (documents, folders), until the card is closed.
+static MIGRATED: std::sync::Mutex<Option<(usize, usize)>> = std::sync::Mutex::new(None);
+
+/// The library was moved to real folders this launch: say so on the card.
+pub fn migrated(r: &crate::store::MigrationReport) { *MIGRATED.lock().unwrap() = Some((r.docs, r.folders)); }
 
 fn notes() -> Option<&'static [(&'static str, &'static str)]> { NOTES.iter().find(|(v, _)| *v == VERSION).map(|(_, n)| *n) }
 
@@ -76,16 +85,23 @@ pub fn startup(existed: bool) {
     if let Err(e) = crate::settings::save(&p) { log::warn!("changelog: {e:#}"); }
 }
 
-/// The card, while it has not been closed.
+/// The card, while it has not been closed: this version's notes, and the
+/// move to real folders when it happened this launch.
 pub fn card(on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Option<AnyElement> {
-    if !PENDING.load(Ordering::Relaxed) { return None }
-    let notes = notes()?;
-    let title = crate::localized_format!("已更新到 {}", "Updated to {}", VERSION);
+    let notes = notes().filter(|_| PENDING.load(Ordering::Relaxed));
+    let moved = *MIGRATED.lock().unwrap();
+    if notes.is_none() && moved.is_none() { return None }
+    let title: String = if notes.is_some() { crate::localized_format!("已更新到 {}", "Updated to {}", VERSION) } else { crate::settings::tr("文档库已改为真实文件夹", "Your library now uses real folders").into() };
+    let line = |text: String| div().w_full().min_w_0().flex().gap(px(6.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_caption())
+        .child(div().flex_none().child("·")).child(div().flex_1().min_w_0().child(text));
     let mut list = div().mt(px(6.)).w_full().min_w_0().flex().flex_col().gap(px(4.));
-    for &(zh, en) in notes {
-        list = list.child(div().w_full().min_w_0().flex().gap(px(6.)).text_size(px(12.)).line_height(px(18.)).text_color(Theme::text_caption())
-            .child(div().flex_none().child("·")).child(div().flex_1().min_w_0().child(crate::settings::tr(zh, en))));
+    if let Some((docs, folders)) = moved {
+        list = list.child(line(crate::localized_format!("文档库改为真实文件夹：访达里看到的就是侧栏，文件以标题命名（{docs} 篇文档、{folders} 个文件夹）",
+            "The library now uses real folders: Finder shows what the sidebar shows, files named by title ({docs} documents, {folders} folders)")));
     }
+    for &(zh, en) in notes.unwrap_or_default() { list = list.child(line(crate::settings::tr(zh, en).into())); }
+    let reveal = moved.map(|_| div().mt(px(6.)).child(crate::settings::link_button("changelog-reveal", crate::settings::tr("在访达中显示", "Show in Finder"))
+        .on_click(|_, _, cx| cx.reveal_path(&crate::store::Store::root_dir()))));
     // A continuous-corner white surface; the faint shadow follows its radius.
     Some(crate::ui::continuous_surface(RADIUS, Theme::bg_body()).id("changelog").flex_none().min_w_0().overflow_hidden().mx(px(crate::sidebar::SB_X - 4.)).mb(px(2.)).pl(px(12.)).pr(px(6.)).pt(px(8.)).pb(px(10.))
         .rounded(px(RADIUS)).shadow(crate::theme::shadow_card())
@@ -93,7 +109,8 @@ pub fn card(on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> 
             .child(div().text_size(px(13.)).line_height(px(20.)).font_weight(FontWeight::SEMIBOLD).child(title))
             .child(div().id("changelog-close").size(px(20.)).flex().items_center().justify_center().rounded(px(6.)).cursor_pointer()
                 .hover(|s| s.bg(Theme::fill_hover())).child(icon("x", 12., Theme::icon()))
-                .on_click(move |e, w, cx| { PENDING.store(false, Ordering::Relaxed); on_close(e, w, cx); })))
+                .on_click(move |e, w, cx| { PENDING.store(false, Ordering::Relaxed); *MIGRATED.lock().unwrap() = None; on_close(e, w, cx); })))
         .child(list)
+        .children(reveal)
         .into_any_element())
 }
