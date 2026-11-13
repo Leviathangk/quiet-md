@@ -25,13 +25,14 @@ pub(crate) fn set_base(feishu: bool) { FEISHU.store(feishu, Ordering::Relaxed); 
 /// 界面语言, in the order Settings lists them. Chinese strings are the keys:
 /// other languages look them up in `l10n` and fall back to English.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Lang { Zh, En, Ko }
+pub enum Lang { Zh, En, Ja, Ko, Es }
 
 impl Lang {
-    pub const ALL: [Lang; 3] = [Lang::Zh, Lang::En, Lang::Ko];
+    pub const ALL: [Lang; 5] = [Lang::Zh, Lang::En, Lang::Ja, Lang::Ko, Lang::Es];
     /// The `language` preference value.
-    pub fn code(self) -> &'static str { match self { Lang::Zh => "zh", Lang::En => "en", Lang::Ko => "ko" } }
-    pub fn pick<T>(self, zh: T, en: T, ko: T) -> T { match self { Lang::Zh => zh, Lang::En => en, Lang::Ko => ko } }
+    pub fn code(self) -> &'static str { match self { Lang::Zh => "zh", Lang::En => "en", Lang::Ja => "ja", Lang::Ko => "ko", Lang::Es => "es" } }
+    /// The language's own name, as Settings lists it.
+    pub fn name(self) -> &'static str { match self { Lang::Zh => "简体中文", Lang::En => "English", Lang::Ja => "日本語", Lang::Ko => "한국어", Lang::Es => "Español" } }
 }
 
 pub fn lang() -> Lang { Lang::ALL.get(LANG.load(Ordering::Relaxed) as usize).copied().unwrap_or(Lang::En) }
@@ -40,8 +41,11 @@ pub fn english() -> bool { lang() != Lang::Zh }
 /// 外观 › 动画 is 丰富: folding, the selection and hover animate too (else they answer at once).
 pub fn motion_high() -> bool { MOTION_HIGH.load(Ordering::Relaxed) }
 pub fn tr(zh: &'static str, en: &'static str) -> &'static str { match lang() { Lang::Zh => zh, Lang::En => en, l => crate::l10n::get(l, zh).unwrap_or(en) } }
-/// For text built in place rather than looked up (dates, counts).
-pub fn pick<T>(zh: T, en: T, ko: T) -> T { lang().pick(zh, en, ko) }
+/// `localized_format!` for a given language: `zh` / `en` build the two
+/// originals; other languages refill their translation of `template`.
+pub fn localized(lang: Lang, template: &str, zh: impl FnOnce() -> String, en: impl FnOnce() -> String) -> String {
+    match lang { Lang::Zh => zh(), Lang::En => en(), l => crate::l10n::refill(l, template, &zh()).unwrap_or_else(en) }
+}
 
 /// Browsers 打开链接 can offer, by the name `open -a` takes. Only the ones
 /// this Mac actually has are listed; anything else is the system default.
@@ -528,6 +532,46 @@ impl Workspace {
         Some(deferred(anchored().anchor(Corner::TopRight).position(point(b.right(), b.bottom() + px(4.))).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(2).into_any_element())
     }
 
+    /// 界面语言's dropdown, each language in its own name.
+    pub(crate) fn render_lang_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let focused = self.lang_menu?;
+        if self.view != View::Settings || self.settings_page != Page::General { return None }
+        let b = self.lang_anchor.get()?;
+        let current = prefs().lang();
+        let rows = Lang::ALL.map(|l| {
+            let g = SharedString::from(format!("lang-opt-{}", l.code()));
+            ui::menu_row(g.clone(), g.clone())
+                .when(l == focused, |d| d.bg(Theme::fill_hover()))
+                .child(div().flex_1().min_w_0().overflow_hidden().child(ui::menu_label(l.name(), g.clone(), gpui::white())))
+                .child(div().flex_none().w(px(14.)).when(l == current, |d| d.child(ui::menu_glyph("check", 14., g.clone()))))
+                .on_hover(cx.listener(move |w, hovered: &bool, _, cx| if *hovered && w.lang_menu != Some(l) { w.lang_menu = Some(l); cx.notify(); }))
+                .on_click(cx.listener(move |w, _, _, cx| { w.lang_menu = None; w.set_pref(|p| p.set_lang(l), cx) }))
+        });
+        let anchor = self.lang_anchor.clone();
+        let menu = ui::popover().id("lang-menu").occlude().flex()
+            .on_mouse_down_out(cx.listener(move |w, ev: &MouseDownEvent, _, cx| {
+                if anchor.get().is_some_and(|b| b.contains(&ev.position)) { return }
+                w.lang_menu = None;
+                cx.notify();
+            }))
+            .child(div().w(px(160.)).py(px(ui::MENU_PAD_Y)).flex().flex_col().children(rows));
+        Some(deferred(anchored().anchor(Corner::TopRight).position(point(b.right(), b.bottom() + px(4.))).snap_to_window_with_margin(px(8.)).child(menu)).with_priority(2).into_any_element())
+    }
+
+    /// Keys while the language dropdown is open; true when used.
+    pub(crate) fn lang_menu_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+        let at = self.lang_menu.map_or(0, |l| l as usize);
+        match key {
+            "escape" => self.lang_menu = None,
+            "up" => self.lang_menu = Some(Lang::ALL[at.saturating_sub(1)]),
+            "down" => self.lang_menu = Some(Lang::ALL[(at + 1).min(Lang::ALL.len() - 1)]),
+            "enter" | "space" => { self.lang_menu = None; self.set_pref(|p| p.set_lang(Lang::ALL[at]), cx); return true }
+            _ => return false,
+        }
+        cx.notify();
+        true
+    }
+
     /// Keys while the theme dropdown is open; true when used.
     pub(crate) fn theme_menu_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
         let ids: Vec<String> = themes::themes().iter().map(|t| t.id.clone()).collect();
@@ -604,6 +648,7 @@ impl Workspace {
         self.cancel_shortcut_recording(cx);
         self.settings_page = page;
         self.theme_menu = None;
+        self.lang_menu = None;
         self.settings_scroll.set_offset(point(px(0.), px(0.)));
         self.shortcut_error = None;
         if self.view != View::Settings { self.show_view(View::Settings, cx); }
@@ -700,7 +745,7 @@ impl Workspace {
         } else {
             let sel = browsers.iter().position(|b| *b == p.browser).map_or(0, |i| i + 1);
             let labels: Vec<&'static str> = std::iter::once(tr("系统默认", "Default")).chain(browsers.iter().copied()).collect();
-            vec![row(tr("打开链接", "Open links"), desc(tr("点击链接时用哪个浏览器打开；网页搜索也用它。", "Which browser a link opens in; 网页搜索 uses it too.")), {
+            vec![row(tr("打开链接", "Open links"), desc(tr("点击链接时用哪个浏览器打开；网页搜索也用它。", "Which browser a link opens in; “Web search” uses it too.")), {
                 segmented("browser", &labels, sel, |w, i, cx| {
                     let app = crate::settings::browser_at(i);
                     w.set_pref(|p| p.browser = app.clone(), cx)
@@ -709,8 +754,14 @@ impl Workspace {
         };
         div().w_full().flex().flex_col().gap(px(28.))
             .child(group(None, vec![
-                row(tr("界面语言", "Interface language"), None,
-                    segmented("lang", &["简体中文", "English", "한국어"], p.lang() as usize, |w, i, cx| w.set_pref(|p| p.set_lang(Lang::ALL[i]), cx), cx)).into_any_element(),
+                row(tr("界面语言", "Interface language"), None, {
+                    let anchor = self.lang_anchor.clone();
+                    let current = p.lang();
+                    popup_button("lang-picker", current.name(), self.lang_menu.is_some())
+                        .child(canvas(move |b, _, _| anchor.set(Some(b)), |_, _, _, _| {}).absolute().inset_0())
+                        .relative()
+                        .on_click(cx.listener(move |w, _, _, cx| { w.lang_menu = if w.lang_menu.is_some() { None } else { Some(current) }; cx.notify(); }))
+                }).into_any_element(),
                 row(tr("自动下载网络图片", "Download web images"), desc(tr("关闭后不联网，网络图片显示为占位，点击单独加载。", "When off the app stays offline; web images show a placeholder you can click to load.")),
                     switch("pref-remote", p.remote_images).on_click(cx.listener(|w, _, _, cx| w.set_pref(|p| p.remote_images = !p.remote_images, cx)))).into_any_element(),
                 row(tr("自动检查更新", "Check for updates automatically"), desc(tr("只读取一份版本信息，不发送任何数据；新版本由你决定何时下载安装。", "Reads a version file and sends nothing about you; you decide when to download and install.")),
@@ -722,7 +773,7 @@ impl Workspace {
                 }).into_any_element(),
                 // 网页搜索 opens the selection in the browser; which site is the
                 // user's habit, so it is a preference rather than a constant.
-                row(tr("网页搜索", "Web search"), desc(tr("选中文字后「网页搜索」用哪个网站。", "Which site 网页搜索 opens the selected text in.")), {
+                row(tr("网页搜索", "Web search"), desc(tr("选中文字后「网页搜索」用哪个网站。", "Which site “Web search” opens the selected text in.")), {
                     let sel = match p.search_engine.as_str() { "bing" => 1, "google" => 2, "duckduckgo" => 3, _ => 0 };
                     segmented("search-engine", &[tr("百度", "Baidu"), "Bing", "Google", "DuckDuckGo"], sel,
                         |w, i, cx| w.set_pref(|p| p.search_engine = ["", "bing", "google", "duckduckgo"][i].into(), cx), cx)
@@ -1250,6 +1301,13 @@ pub(crate) fn localize(text: &str, english: bool) -> &str {
         "五" => "Fri",
         "六" => "Sat",
         "日" => "Sun",
+        "周一" => "Mon",
+        "周二" => "Tue",
+        "周三" => "Wed",
+        "周四" => "Thu",
+        "周五" => "Fri",
+        "周六" => "Sat",
+        "周日" => "Sun",
         "事件发生时" => "At time of event",
         "提前 5 分钟" => "5 minutes before",
         "提前 15 分钟" => "15 minutes before",
@@ -1358,12 +1416,8 @@ pub(crate) fn localize(text: &str, english: bool) -> &str {
 #[macro_export]
 macro_rules! localized_format {
     ($zh:literal, $en:literal $(, $arg:expr)* $(,)?) => {
-        match $crate::settings::lang() {
-            $crate::settings::Lang::Zh => format!($zh $(, $arg)*),
-            $crate::settings::Lang::En => format!($en $(, $arg)*),
-            // Other languages translate the Chinese template; the values are read back out of the Chinese text.
-            l => $crate::l10n::refill(l, $zh, &format!($zh $(, $arg)*)).unwrap_or_else(|| format!($en $(, $arg)*)),
-        }
+        // Other languages translate the Chinese template; the values are read back out of the Chinese text.
+        $crate::settings::localized($crate::settings::lang(), $zh, || format!($zh $(, $arg)*), || format!($en $(, $arg)*))
     };
 }
 
