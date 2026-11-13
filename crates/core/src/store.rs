@@ -260,6 +260,37 @@ pub struct Store {
 #[derive(Clone)]
 struct Parsed { title: String, icon: Option<String>, body: std::sync::Arc<str>, reminders: Vec<crate::model::InlineReminder>, links: Vec<crate::model::DocLink> }
 
+/// `Store::parsed` kept between launches (#170): reading every document again
+/// on launch took ~0.45 s a file on Windows, where each read is scanned. By
+/// file path, so a cache never lends one file's text to another; the stamps
+/// are this machine's mtimes, so it lives in the cache folder, not in the
+/// (possibly synced) library. Bump `PARSED_CACHE` when what `list` takes from
+/// a file changes; a release discards it anyway.
+const PARSED_CACHE: u32 = 1;
+
+#[derive(Serialize, Deserialize)]
+struct ParsedCache { version: String, docs: HashMap<PathBuf, CachedDoc> }
+
+#[derive(Serialize, Deserialize)]
+struct CachedDoc {
+    modified: std::time::SystemTime,
+    len: u64,
+    title: String,
+    icon: Option<String>,
+    body: String,
+    reminders: Vec<(i64, i64, bool, bool)>,
+    links: Vec<(String, usize, Vec<(String, Option<String>)>)>,
+}
+
+fn parsed_cache_version() -> String { format!("{}-{PARSED_CACHE}", env!("CARGO_PKG_VERSION")) }
+
+/// Beside the other things this computer keeps about `root`, in the cache folder.
+fn parsed_cache_path(root: &Path) -> PathBuf {
+    let tmp = std::env::temp_dir();
+    let base = if cfg!(test) || root.starts_with(&tmp) { tmp.join("quiet-md-local") } else { dirs::cache_dir().unwrap_or(tmp).join("quiet-md") };
+    base.join("list").join(format!("{}.json", library_key(root)))
+}
+
 /// One write to the indexes: several copies of the app may share a library
 /// (builds tested side by side), so this is a short mutex, not a
 /// single-instance guard. Released when the write is done.
@@ -646,6 +677,7 @@ impl Store {
             let disk: DiskIndex = load_json(&internal.join("index.json"), "文档索引", &mut store.warnings);
             let local = store.read_local();
             store.index = store.from_disk(&disk, &local);
+            store.load_parsed();
         }
         if let Ok(entries) = std::fs::read_dir(store.recovery_dir()) {
             for entry in entries.flatten() {
@@ -1168,6 +1200,7 @@ impl Store {
         }
         let pending: HashSet<&str> = found.pending.iter().map(String::as_str).collect();
         let mut out = vec![];
+        let mut reparsed = false;
         let mut ids: Vec<String> = self.index.iter().filter(|(_, m)| m.folder.is_none()).map(|(k, _)| k.clone()).collect();
         ids.sort();
         for id in ids {
@@ -1189,7 +1222,7 @@ impl Store {
                     let Ok(text) = std::fs::read_to_string(&p) else { continue };
                     let doc = self.parse_doc(&id, &text).unwrap_or_default();
                     let parsed = Parsed { title: doc.title.text.clone(), icon: doc.icon.clone(), body: doc.plain_text().into(), reminders: doc.reminders(), links: doc.doc_links() };
-                    if let Some((t, len)) = stamp { self.parsed.insert(id.clone(), (t, len, parsed.clone())); }
+                    if let Some((t, len)) = stamp { self.parsed.insert(id.clone(), (t, len, parsed.clone())); reparsed = true; }
                     parsed
                 }
             };
@@ -1205,11 +1238,38 @@ impl Store {
             out.push(Entry { id: id.clone(), meta: meta.clone(), title, icon: None, body: Default::default(), reminders: vec![], links: vec![] });
         }
         let seen: HashSet<&str> = out.iter().map(|e| e.id.as_str()).collect();
+        let cached = self.parsed.len();
         self.parsed.retain(|id, _| seen.contains(id.as_str()));
+        if reparsed || self.parsed.len() != cached { let _ = self.save_parsed(); }
         if dirty && _lock.is_some() {
             let _ = self.save_index();
         }
         out
+    }
+
+    /// What `list` parsed last launch, for the files still where they were.
+    fn load_parsed(&mut self) {
+        let Some(c) = std::fs::read(parsed_cache_path(&self.root)).ok().and_then(|b| serde_json::from_slice::<ParsedCache>(&b).ok()) else { return };
+        if c.version != parsed_cache_version() { return }
+        let mut docs = c.docs;
+        let ids: Vec<String> = self.index.iter().filter(|(_, m)| m.folder.is_none()).map(|(k, _)| k.clone()).collect();
+        for id in ids {
+            let Some(d) = docs.remove(&self.path(&id)) else { continue };
+            let reminders = d.reminders.into_iter().map(|(expire, notify, should_notify, whole_day)| crate::model::InlineReminder { expire, notify, should_notify, whole_day }).collect();
+            let links = d.links.into_iter().map(|(target, block, line)| crate::model::DocLink { target, block, line }).collect();
+            self.parsed.insert(id, (d.modified, d.len, Parsed { title: d.title, icon: d.icon, body: d.body.into(), reminders, links }));
+        }
+    }
+
+    fn save_parsed(&self) -> Result<()> {
+        let docs = self.parsed.iter().map(|(id, (modified, len, p))| (self.path(id), CachedDoc {
+            modified: *modified, len: *len, title: p.title.clone(), icon: p.icon.clone(), body: p.body.to_string(),
+            reminders: p.reminders.iter().map(|r| (r.expire, r.notify, r.should_notify, r.whole_day)).collect(),
+            links: p.links.iter().map(|l| (l.target.clone(), l.block, l.line.clone())).collect(),
+        })).collect();
+        let path = parsed_cache_path(&self.root);
+        if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
+        write_atomic(&path, &serde_json::to_vec(&ParsedCache { version: parsed_cache_version(), docs })?)
     }
 
     fn read_doc_text(&self, id: &str) -> Result<String> {
@@ -1865,6 +1925,7 @@ mod tests {
     impl Drop for Lib {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
+            let _ = std::fs::remove_file(super::parsed_cache_path(&self.0));
         }
     }
 
@@ -2111,6 +2172,28 @@ mod tests {
         // The library holds the note and its own hidden folder, nothing else.
         let names: Vec<String> = std::fs::read_dir(&lib.0).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert_eq!({ let mut n = names; n.sort(); n }, [".quiet", "一.xml"]);
+    }
+
+    #[test]
+    fn list_cache_survives_a_relaunch() {
+        let lib = Lib::new("listcache-disk");
+        let mut s = lib.open();
+        let a = s.create_from(&doc("一")).unwrap();
+        s.create_from(&doc("二")).unwrap();
+        assert_eq!(s.list().len(), 2);
+        drop(s);
+        // A new launch starts with what the last one parsed (#170) …
+        let mut s = lib.open();
+        assert_eq!(s.parsed.len(), 2);
+        s.parsed.get_mut(&a).unwrap().2.title = "缓存".into();
+        assert!(s.list().iter().any(|e| e.title == "缓存"));
+        drop(s);
+        // … and drops a cache written by another version.
+        let path = parsed_cache_path(&lib.0);
+        let mut c: ParsedCache = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        c.version = "0.0.0-0".into();
+        std::fs::write(&path, serde_json::to_vec(&c).unwrap()).unwrap();
+        assert!(lib.open().parsed.is_empty());
     }
 
     #[test]
