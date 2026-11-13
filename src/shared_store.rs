@@ -10,6 +10,7 @@ impl SharedStore {
     pub fn open() -> Result<Self> { Ok(Self(Rc::new(RefCell::new(Store::open()?)))) }
     pub fn take_warnings(&self) -> Vec<String> { std::mem::take(&mut self.0.borrow_mut().warnings) }
     pub fn list(&mut self) -> Vec<Entry> { self.0.borrow_mut().list() }
+    pub fn docs_dir(&self) -> std::path::PathBuf { self.0.borrow().docs_dir() }
     pub fn load(&self, id: &str) -> Result<Document> { self.0.borrow_mut().load(id) }
     pub fn load_for_edit(&self, id: &str, shared: bool) -> Result<Document> { self.0.borrow().load_for_edit(id, shared) }
     pub fn forget_loaded(&self, id: &str) { self.0.borrow().forget_loaded(id); }

@@ -365,6 +365,19 @@ pub fn read_bounded(path: &std::path::Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// A cheap stamp of a document folder: how many entries it holds and when it
+/// last changed. Adding, renaming or removing a file changes it, so a `.md`
+/// written in from outside is noticed without reading every document.
+pub fn docs_stamp(dir: &std::path::Path) -> (usize, u64) {
+    let count = std::fs::read_dir(dir).map_or(0, |rd| rd.flatten().count());
+    let stamp = std::fs::metadata(dir)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos() as u64);
+    (count, stamp)
+}
+
 impl Store {
     /// `QUIET_MD_HOME`, else a folder of
     /// its own in the user's Documents, where they can see and back it up.
@@ -379,6 +392,12 @@ impl Store {
         let d = Self::root_dir().join("assets");
         let _ = std::fs::create_dir_all(&d);
         d
+    }
+
+    /// The folder documents live in; a `.md` written there by hand joins the
+    /// library the next time [`Store::list`] runs.
+    pub fn docs_dir(&self) -> PathBuf {
+        self.root.join("docs")
     }
 
     pub fn open() -> Result<Self> {
@@ -1136,6 +1155,18 @@ mod tests {
         s.restore(&id).unwrap();
         assert!(file.is_file());
         assert_eq!(s.load(&id).unwrap().title.text, "Renamed");
+    }
+
+    #[test]
+    fn a_hand_written_markdown_file_joins_the_library() {
+        let lib = Lib::new("hand-written");
+        let mut s = lib.open();
+        let before = docs_stamp(&s.docs_dir());
+        std::fs::write(lib.0.join("docs").join("model.md"), "# Written by a model\n").unwrap();
+        assert_ne!(before, docs_stamp(&s.docs_dir()), "the folder stamp has to change");
+        let e = s.list().into_iter().find(|e| e.id == "model").unwrap();
+        assert!(e.meta.markdown);
+        assert!(e.body.contains("Written by a model"), "{:?}", e.body);
     }
 
     #[test]

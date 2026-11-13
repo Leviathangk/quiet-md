@@ -387,6 +387,30 @@ impl Workspace {
             this.update(cx, |w, cx| { w.cancel_shortcut_recording(cx); w.save_before(cx, |_, window, _| window.remove_window()) }).unwrap_or(true)
         });
         if !quick { crate::settings::watch_themes(cx); }
+        // A file written into `docs/` from outside (a model writing a note,
+        // say) joins the library without going away and back: the folder's
+        // stamp is compared every couple of seconds and the list re-read only
+        // when it changed.
+        let docs = store.docs_dir();
+        cx.spawn(async move |this, cx| {
+            let mut last = crate::store::docs_stamp(&docs);
+            loop {
+                cx.background_executor().timer(Duration::from_secs(2)).await;
+                let dir = docs.clone();
+                let now = cx.background_executor().spawn(async move { crate::store::docs_stamp(&dir) }).await;
+                if now == last { continue }
+                let reloaded = this.update(cx, |w, cx| {
+                    // Not mid-rename: the row under the field would be rebuilt.
+                    if w.rename.is_some() || w.move_dlg.is_some() { return false }
+                    w.entries = w.store.list();
+                    w.sort();
+                    cx.notify();
+                    true
+                });
+                match reloaded { Ok(true) => last = now, Ok(false) => {}, Err(_) => break }
+            }
+        })
+        .detach();
         // 日期提醒: post what fell due since the last look (not what was
         // missed while the app was closed).
         cx.spawn(async |this, cx| {
