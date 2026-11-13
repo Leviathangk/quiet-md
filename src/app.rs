@@ -397,6 +397,30 @@ impl Workspace {
             this.update(cx, |w, cx| { w.cancel_shortcut_recording(cx); w.save_before(cx, |_, window, _| window.remove_window()) }).unwrap_or(true)
         });
         if !quick { crate::settings::watch_themes(cx); }
+        // A file written into the library from outside (a model writing a
+        // note, say) joins it without going away and back: the library's
+        // shape is compared every couple of seconds and the list re-read only
+        // when it changed.
+        cx.spawn(async move |this, cx| {
+            let bg = cx.background_executor().clone();
+            let shape = || bg.spawn(async { crate::store::Store::shape_at(&crate::store::Store::root_dir()) });
+            let mut last = shape().await;
+            loop {
+                bg.timer(Duration::from_secs(2)).await;
+                let now = shape().await;
+                if now == last { continue }
+                let reloaded = this.update(cx, |w, cx| {
+                    // Not mid-rename: the row under the field would be rebuilt.
+                    if w.rename.is_some() || w.move_dlg.is_some() { return false }
+                    w.entries = w.store.list();
+                    w.sort();
+                    cx.notify();
+                    true
+                });
+                match reloaded { Ok(true) => last = now, Ok(false) => {}, Err(_) => break }
+            }
+        })
+        .detach();
         // 日期提醒: post what fell due since the last look (not what was
         // missed while the app was closed).
         cx.spawn(async |this, cx| {

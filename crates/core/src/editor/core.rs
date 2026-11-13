@@ -3938,4 +3938,21 @@ mod tests {
         c.enter_from_block_sel();
         assert_eq!(c.units().len(), 4);
     }
+
+    /// ⌥← / ⌥→ in a text field land where the editor's do.
+    #[test]
+    fn words_are_moved_past_whole_words() {
+        let s = "rename this file";
+        assert_eq!(next_word(s, 0), 6);
+        assert_eq!(next_word(s, 6), 11);
+        assert_eq!(prev_word(s, 11), 7);
+        assert_eq!(prev_word(s, 6), 0);
+        // Runs of spaces are skipped, not stopped in.
+        assert_eq!(next_word("rename  this", 6), 12);
+        assert_eq!(prev_word("  this", 6), 2);
+        // Chinese has no spaces between words: a stop per character, as in the
+        // editor.
+        assert_eq!(next_word("中文标题", 0), 3);
+        assert_eq!(prev_word("中文标题", 12), 9);
+    }
 }

@@ -573,6 +573,17 @@ impl Store {
     /// Where images and attachments are in library `root`.
     pub fn assets_in(root: &Path) -> PathBuf { root.join(if Self::flat_at(root) { "assets" } else { ASSETS }) }
 
+    /// What the library's files are, without reading them: changes when a
+    /// document or folder is added, removed or renamed (by hand, or a model
+    /// writing a note), not when one is saved. Cheap enough to poll.
+    pub fn shape_at(root: &Path) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let found = layout::scan(&if Self::flat_at(root) { root.join("docs") } else { root.to_path_buf() });
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (found.dirs, found.docs, found.pending).hash(&mut h);
+        h.finish()
+    }
+
     /// Whether `dir` holds a library, of this layout or an older one.
     pub fn is_library(dir: &Path) -> bool {
         dir.join(INTERNAL).join("format.json").is_file() || migrate::legacy(dir)
@@ -1999,6 +2010,21 @@ mod tests {
         s.restore(&id).unwrap();
         assert!(file.is_file());
         assert_eq!(s.load(&id).unwrap().title.text, "Renamed");
+    }
+
+    #[test]
+    fn a_hand_written_markdown_file_joins_the_library() {
+        let lib = Lib::new("hand-written");
+        let mut s = lib.open();
+        let (id, doc) = s.create().unwrap();
+        let before = Store::shape_at(&lib.0);
+        s.save(&id, &doc).unwrap();
+        assert_eq!(before, Store::shape_at(&lib.0), "saving is not a change of shape");
+        std::fs::write(lib.0.join("model.md"), "# Written by a model\n").unwrap();
+        assert_ne!(before, Store::shape_at(&lib.0), "a new file is");
+        let e = s.list().into_iter().find(|e| e.meta.rel == "model.md").unwrap();
+        assert!(e.meta.markdown);
+        assert!(e.body.contains("Written by a model"), "{:?}", e.body);
     }
 
     #[test]
